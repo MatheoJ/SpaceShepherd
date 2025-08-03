@@ -30,6 +30,9 @@ class ASpaceShepherdCharacter : public ACharacter
 	/** Follow camera */
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = Camera, meta = (AllowPrivateAccess = "true"))
 	UCameraComponent* FollowCamera;
+
+	UFUNCTION(BlueprintCallable, Category = "Input")
+	void OnGravityChanged();
 	
 protected:
 
@@ -49,6 +52,18 @@ protected:
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category="Input")
 	UInputAction* MouseLookAction;
 
+	// Shepherd component
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Shepherd")
+	class UPlayerShepherdComponent* ShepherdComponent;
+
+	// Input actions
+	UFUNCTION(BlueprintCallable, Category = "Input")
+	void OnAttractionPressed();
+	UFUNCTION(BlueprintCallable, Category = "Input")
+	void OnRepulsionPressed();
+	UFUNCTION(BlueprintCallable, Category = "Input")
+	void OnNeutralPressed();
+	
 public:
 
 	/** Constructor */
@@ -58,6 +73,8 @@ protected:
 
 	/** Initialize input action bindings */
 	virtual void SetupPlayerInputComponent(class UInputComponent* PlayerInputComponent) override;
+
+	
 
 protected:
 

@@ -26,4 +26,12 @@ protected:
 	/** Input mapping context setup */
 	virtual void SetupInputComponent() override;
 
+	virtual void BeginPlay() override;
+    
+private:
+	void RestartGame();
+	void PauseGame();
+    
+	class ACowHerdingGameMode* GameModeRef;
+	
 };

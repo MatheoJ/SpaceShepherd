@@ -10,8 +10,13 @@
 #include "EnhancedInputComponent.h"
 #include "EnhancedInputSubsystems.h"
 #include "InputActionValue.h"
+#include "CowsAI/PlayerShepherdComponent.h"
 
 DEFINE_LOG_CATEGORY(LogTemplateCharacter);
+
+void ASpaceShepherdCharacter::OnGravityChanged()
+{
+}
 
 ASpaceShepherdCharacter::ASpaceShepherdCharacter()
 {
@@ -49,6 +54,9 @@ ASpaceShepherdCharacter::ASpaceShepherdCharacter()
 
 	// Note: The skeletal mesh and anim blueprint references on the Mesh component (inherited from Character) 
 	// are set in the derived blueprint asset named ThirdPersonCharacter (to avoid direct content references in C++)
+
+	ShepherdComponent = CreateDefaultSubobject<UPlayerShepherdComponent>(TEXT("ShepherdComponent"));
+
 }
 
 void ASpaceShepherdCharacter::SetupPlayerInputComponent(UInputComponent* PlayerInputComponent)
@@ -95,6 +103,17 @@ void ASpaceShepherdCharacter::DoMove(float Right, float Forward)
 {
 	if (GetController() != nullptr)
 	{
+		FVector CameraForwardVector = FollowCamera->GetForwardVector();
+		FVector CameraRightVector = FollowCamera->GetRightVector();
+
+		FVector GravityDirection = GetCharacterMovement()->GetGravityDirection();
+
+		CameraForwardVector = CameraForwardVector - FVector::DotProduct(CameraForwardVector, GravityDirection) * CameraForwardVector;
+		CameraRightVector = CameraRightVector - FVector::DotProduct(CameraRightVector, GravityDirection) * CameraRightVector;
+		//Normalize the vectors to ensure they are unit vectors
+		CameraForwardVector.Normalize();
+		CameraRightVector.Normalize();
+		
 		// find out which way is forward
 		const FRotator Rotation = GetController()->GetControlRotation();
 		const FRotator YawRotation(0, Rotation.Yaw, 0);
@@ -106,8 +125,8 @@ void ASpaceShepherdCharacter::DoMove(float Right, float Forward)
 		const FVector RightDirection = FRotationMatrix(YawRotation).GetUnitAxis(EAxis::Y);
 
 		// add movement 
-		AddMovementInput(ForwardDirection, Forward);
-		AddMovementInput(RightDirection, Right);
+		AddMovementInput(CameraForwardVector, Forward);
+		AddMovementInput(CameraRightVector, Right);
 	}
 }
 
@@ -131,4 +150,28 @@ void ASpaceShepherdCharacter::DoJumpEnd()
 {
 	// signal the character to stop jumping
 	StopJumping();
+}
+
+void ASpaceShepherdCharacter::OnAttractionPressed()
+{
+	if (ShepherdComponent)
+	{
+		ShepherdComponent->HandleAttractionInput();
+	}
+}
+
+void ASpaceShepherdCharacter::OnRepulsionPressed()
+{
+	if (ShepherdComponent)
+	{
+		ShepherdComponent->HandleRepulsionInput();
+	}
+}
+
+void ASpaceShepherdCharacter::OnNeutralPressed()
+{
+	if (ShepherdComponent)
+	{
+		ShepherdComponent->SetNeutralMode();
+	}
 }
