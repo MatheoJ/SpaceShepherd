@@ -10,7 +10,8 @@ enum class EShepherdMode : uint8
 {
     Neutral     UMETA(DisplayName = "Neutral"),
     Attraction  UMETA(DisplayName = "Attraction"),
-    Repulsion   UMETA(DisplayName = "Repulsion")
+    Repulsion   UMETA(DisplayName = "Repulsion"),
+    LaserAttraction UMETA(DisplayName = "LaserAttraction")  // New mode for laser
 };
 
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FOnShepherdModeChanged, EShepherdMode, NewMode);
@@ -57,6 +58,39 @@ public:
     
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Shepherd|Visual")
     FColor RepulsionColor = FColor::Red;
+    
+    // ========== Laser Attraction Properties ==========
+    
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Shepherd|Laser")
+    float LaserMaxRange = 5000.0f;
+    
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Shepherd|Laser")
+    float LaserAttractionRadius = 500.0f;
+    
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Shepherd|Laser")
+    FColor LaserColor = FColor::Cyan;
+    
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Shepherd|Laser")
+    float LaserThickness = 3.0f;
+    
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Shepherd|Laser")
+    bool bShowLaserImpactPoint = true;
+    
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Shepherd|Laser")
+    float LaserImpactSphereSize = 50.0f;
+    
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Shepherd|Laser")
+    float LaserAttractionStrength = 2.0f;
+    
+    // Laser state
+    UPROPERTY(BlueprintReadOnly, Category = "Shepherd|Laser")
+    bool bIsLaserActive = false;
+    
+    UPROPERTY(BlueprintReadOnly, Category = "Shepherd|Laser")
+    FVector LaserImpactPoint = FVector::ZeroVector;
+    
+    UPROPERTY(BlueprintReadOnly, Category = "Shepherd|Laser")
+    bool bLaserHasValidHit = false;
     
     // ========== Carrying System Properties ==========
     
@@ -147,6 +181,23 @@ public:
     UFUNCTION(BlueprintCallable, Category = "Shepherd")
     bool IsNotNeutral() const { return CurrentMode != EShepherdMode::Neutral; }
     
+    // ========== Laser Attraction Functions ==========
+    
+    UFUNCTION(BlueprintCallable, Category = "Shepherd|Laser")
+    void StartLaserAttraction();
+    
+    UFUNCTION(BlueprintCallable, Category = "Shepherd|Laser")
+    void StopLaserAttraction();
+    
+    UFUNCTION(BlueprintCallable, Category = "Shepherd|Laser")
+    bool IsLaserActive() const { return bIsLaserActive; }
+    
+    UFUNCTION(BlueprintCallable, Category = "Shepherd|Laser")
+    FVector GetLaserAttractionPoint() const { return LaserImpactPoint; }
+    
+    UFUNCTION(BlueprintCallable, Category = "Shepherd|Laser")
+    bool HasValidLaserTarget() const { return bLaserHasValidHit; }
+    
     // ========== Carrying Functions ==========
     
     UFUNCTION(BlueprintCallable, Category = "Shepherd|Carrying")
@@ -194,6 +245,12 @@ public:
     
     UFUNCTION(BlueprintCallable, Category = "Shepherd|Input")
     void HandleThrowReleased();
+    
+    UFUNCTION(BlueprintCallable, Category = "Shepherd|Input")
+    void HandleLaserPressed();
+    
+    UFUNCTION(BlueprintCallable, Category = "Shepherd|Input")
+    void HandleLaserReleased();
 
 private:
     void UpdateNearbyCows();
@@ -206,6 +263,13 @@ private:
     void DisableCowPhysics(class ACowCharacter* Cow);
     void EnableCowPhysics(class ACowCharacter* Cow);
     
+    // Laser functions
+    void UpdateLaserAttraction();
+    void PerformLaserTrace();
+    void DrawLaser();
+    FVector GetLaserStartPosition() const;
+    FVector GetLaserDirection() const;
+    
     // Cache of nearby cows for efficient updates
     UPROPERTY()
     TArray<class ACowCharacter*> NearbyCows;
@@ -215,4 +279,7 @@ private:
     
     // Trajectory preview points
     TArray<FVector> TrajectoryPointsCache;
+    
+    // Laser trace hit result
+    FHitResult LaserHitResult;
 };

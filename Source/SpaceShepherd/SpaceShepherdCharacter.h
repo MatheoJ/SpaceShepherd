@@ -74,6 +74,10 @@ protected:
     /** Neutral Mode Input Action */
     UPROPERTY(EditAnywhere, BlueprintReadOnly, Category="Input")
     UInputAction* NeutralAction;
+    
+    /** Laser Attraction Input Action (Right Click Hold) */
+    UPROPERTY(EditAnywhere, BlueprintReadOnly, Category="Input")
+    UInputAction* LaserAction;
 
     // ========== Components ==========
     
@@ -106,6 +110,14 @@ protected:
     /** Handler for throw release */
     UFUNCTION(BlueprintCallable, Category = "Input")
     void OnThrowReleased();
+    
+    /** Handler for laser attraction start (Right Click) */
+    UFUNCTION(BlueprintCallable, Category = "Input")
+    void OnLaserPressed();
+    
+    /** Handler for laser attraction end (Right Click Release) */
+    UFUNCTION(BlueprintCallable, Category = "Input")
+    void OnLaserReleased();
     
 public:
 

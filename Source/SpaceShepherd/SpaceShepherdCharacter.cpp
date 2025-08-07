@@ -110,6 +110,14 @@ void ASpaceShepherdCharacter::SetupPlayerInputComponent(UInputComponent* PlayerI
 			EnhancedInputComponent->BindAction(ThrowAction, ETriggerEvent::Started, this, &ASpaceShepherdCharacter::OnThrowPressed);
 			EnhancedInputComponent->BindAction(ThrowAction, ETriggerEvent::Completed, this, &ASpaceShepherdCharacter::OnThrowReleased);
 		}
+		
+		// ========== Laser Attraction (Right Click Hold) ==========
+		
+		if (LaserAction)
+		{
+			EnhancedInputComponent->BindAction(LaserAction, ETriggerEvent::Started, this, &ASpaceShepherdCharacter::OnLaserPressed);
+			EnhancedInputComponent->BindAction(LaserAction, ETriggerEvent::Completed, this, &ASpaceShepherdCharacter::OnLaserReleased);
+		}
 	}
 	else
 	{
@@ -248,5 +256,23 @@ void ASpaceShepherdCharacter::OnThrowReleased()
 	{
 		ShepherdComponent->HandleThrowReleased();
 		UE_LOG(LogTemplateCharacter, Log, TEXT("Released throw with power: %.2f"), ShepherdComponent->GetCurrentThrowPower());
+	}
+}
+
+void ASpaceShepherdCharacter::OnLaserPressed()
+{
+	if (ShepherdComponent)
+	{
+		ShepherdComponent->HandleLaserPressed();
+		UE_LOG(LogTemplateCharacter, Log, TEXT("Laser attraction activated"));
+	}
+}
+
+void ASpaceShepherdCharacter::OnLaserReleased()
+{
+	if (ShepherdComponent)
+	{
+		ShepherdComponent->HandleLaserReleased();
+		UE_LOG(LogTemplateCharacter, Log, TEXT("Laser attraction deactivated"));
 	}
 }

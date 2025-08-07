@@ -58,6 +58,9 @@ void UCowBoidsComponent::TickComponent(float DeltaTime, ELevelTick TickType, FAc
     // Update player detection
     UpdatePlayerDetection();
     
+    // Update laser detection
+    UpdateLaserDetection();
+    
     // Update max speed based on current behavior
     UpdateMaxSpeed(DeltaTime);
     
@@ -100,7 +103,29 @@ void UCowBoidsComponent::UpdateMaxSpeed(float DeltaTime)
     // Determine current max speed based on behavior
     float TargetSpeed = WanderSpeed;
     
-    if (bPlayerInRange && DetectedPlayer)
+    // Laser attraction works independently of player distance
+    if (bIsLaserActive)
+    {
+        float DistanceToLaser = FVector::Dist(OwnerCharacter->GetActorLocation(), LaserAttractionPoint);
+        
+        if (DistanceToLaser <= LaserStopDistance)
+        {
+            TargetSpeed = 0.0f; // Stop when close enough
+        }
+        else if (DistanceToLaser <= LaserSlowdownDistance)
+        {
+            // Gradual slowdown
+            float SlowdownFactor = (DistanceToLaser - LaserStopDistance) / 
+                                 (LaserSlowdownDistance - LaserStopDistance);
+            TargetSpeed = LaserAttractionSpeed * SlowdownFactor;
+        }
+        else
+        {
+            TargetSpeed = LaserAttractionSpeed;
+        }
+    }
+    // Only check normal player attraction if player is actually in range
+    else if (bPlayerInRange && DetectedPlayer)
     {
         float DistanceToPlayer = FVector::Dist(OwnerCharacter->GetActorLocation(), DetectedPlayer->GetActorLocation());
         
@@ -136,7 +161,7 @@ void UCowBoidsComponent::UpdateMaxSpeed(float DeltaTime)
     }
     else
     {
-        // No player interaction - use wander speed
+        // No interaction - use wander speed
         TargetSpeed = WanderSpeed;
     }
     
@@ -190,10 +215,17 @@ FVector UCowBoidsComponent::CalculateSteeringForce(float DeltaTime)
     FVector Separation = CalculateSeparation() * SeparationWeight;
     SteeringForce += Separation;
     
-    // 3. Player interaction (reduced influence when avoiding obstacles)
+    // 3. Player/Laser interaction (reduced influence when avoiding obstacles)
     float PlayerInfluenceReduction = (bIsAvoidingObstacle || bIsAvoidingCliff) ? 0.2f : 1.0f;
     
-    if (bPlayerInRange && DetectedPlayer)
+    // Laser attraction works independently of player distance
+    if (bIsLaserActive)
+    {
+        FVector LaserForce = CalculateLaserAttraction() * LaserAttractionWeight * PlayerInfluenceReduction;
+        SteeringForce += LaserForce;
+    }
+    // Only apply normal player attraction/repulsion if player is in range
+    else if (bPlayerInRange && DetectedPlayer)
     {
         float DistanceToPlayer = FVector::Dist(OwnerCharacter->GetActorLocation(), DetectedPlayer->GetActorLocation());
         
@@ -209,8 +241,8 @@ FVector UCowBoidsComponent::CalculateSteeringForce(float DeltaTime)
         }
     }
     
-    // 4. Wander behavior (only if not interacting with player and not avoiding obstacles)
-    if (!bIsAvoidingObstacle && !bIsAvoidingCliff)
+    // 4. Wander behavior (only if not interacting with player/laser and not avoiding obstacles)
+    if (!bIsAvoidingObstacle && !bIsAvoidingCliff && !bIsLaserActive)
     {
         if (!bPlayerInRange || (!CowChar->bIsAttractedToPlayer && !CowChar->bIsRepulsedByPlayer))
         {
@@ -493,16 +525,25 @@ void UCowBoidsComponent::UpdatePlayerDetection()
             continue;
             
         UPlayerShepherdComponent* ShepherdComp = Actor->FindComponentByClass<UPlayerShepherdComponent>();
-        if (ShepherdComp && ShepherdComp->IsNotNeutral())
+        if (!ShepherdComp)
+            continue;
+        
+        // Store the player reference regardless of distance (needed for laser detection)
+        DetectedPlayer = Actor;
+        ShepherdComponent = ShepherdComp;
+        
+        // Check if player is in range for normal attraction/repulsion
+        if (ShepherdComp->IsNotNeutral() && ShepherdComp->GetCurrentMode() != EShepherdMode::LaserAttraction)
         {
             float Distance = FVector::Dist(OwnerCharacter->GetActorLocation(), Actor->GetActorLocation());
             if (Distance <= PlayerDetectionRadius)
             {
                 bPlayerInRange = true;
-                DetectedPlayer = Actor;
                 break; // Assume only one player for now
             }
         }
+        
+        break; // We found a player with shepherd component, that's enough
     }
 }
 
@@ -579,9 +620,17 @@ void UCowBoidsComponent::DrawDebugInfo()
     FVector WanderCenter = Location + OwnerCharacter->GetActorForwardVector() * WanderDistance;
     DrawDebugSphere(GetWorld(), WanderCenter, WanderRadius, 8, FColor::Blue, false, -1, 0, 1);
     
+    // Draw laser attraction if active
+    if (bIsLaserActive)
+    {
+        DrawDebugLine(GetWorld(), Location, LaserAttractionPoint, FColor::Cyan, false, -1, 0, 3);
+        DrawDebugSphere(GetWorld(), LaserAttractionPoint, LaserStopDistance, 12, FColor::Cyan, false, -1, 0, 0.5f);
+        DrawDebugSphere(GetWorld(), LaserAttractionPoint, LaserSlowdownDistance, 12, FColor::Blue, false, -1, 0, 0.5f);
+    }
+    
     // Draw attraction stop distance if attracted
     ACowCharacter* CowChar = Cast<ACowCharacter>(OwnerCharacter);
-    if (CowChar && CowChar->bIsAttractedToPlayer && DetectedPlayer)
+    if (CowChar && CowChar->bIsAttractedToPlayer && DetectedPlayer && !bIsLaserActive)
     {
         DrawDebugSphere(GetWorld(), DetectedPlayer->GetActorLocation(), AttractionStopDistance, 12, FColor::Green, false, -1, 0, 0.5f);
         DrawDebugSphere(GetWorld(), DetectedPlayer->GetActorLocation(), AttractionSlowdownDistance, 12, FColor::Yellow, false, -1, 0, 0.5f);
@@ -594,12 +643,17 @@ void UCowBoidsComponent::DrawDebugInfo()
         MovementComponent ? MovementComponent->MaxWalkSpeed : 0.0f);
     DrawDebugString(GetWorld(), Location + FVector(0, 0, 100), SpeedInfo, nullptr, FColor::White, 0.0f, true);
     
-    // Draw line to player if detected
-    if (bPlayerInRange && DetectedPlayer)
+    // Draw behavior state
+    FString BehaviorText = TEXT("Neutral");
+    FColor LineColor = FColor::White;
+    
+    if (bIsLaserActive)
     {
-        FColor LineColor = FColor::White;
-        FString BehaviorText = TEXT("Neutral");
-        
+        BehaviorText = TEXT("Laser Attracted");
+        LineColor = FColor::Cyan;
+    }
+    else if (bPlayerInRange && DetectedPlayer)
+    {
         if (CowChar)
         {
             if (CowChar->bIsAttractedToPlayer)
@@ -621,8 +675,9 @@ void UCowBoidsComponent::DrawDebugInfo()
         }
         
         DrawDebugLine(GetWorld(), Location, DetectedPlayer->GetActorLocation(), LineColor, false, -1, 0, 2);
-        DrawDebugString(GetWorld(), Location + FVector(0, 0, 150), BehaviorText, nullptr, LineColor, 0.0f, true);
     }
+    
+    DrawDebugString(GetWorld(), Location + FVector(0, 0, 150), BehaviorText, nullptr, LineColor, 0.0f, true);
     
     // Show avoidance status
     if (bIsAvoidingObstacle || bIsAvoidingCliff)
@@ -632,4 +687,86 @@ void UCowBoidsComponent::DrawDebugInfo()
         if (bIsAvoidingCliff) AvoidanceText += TEXT("Avoiding Cliff");
         DrawDebugString(GetWorld(), Location + FVector(0, 0, 200), AvoidanceText, nullptr, FColor::Orange, 0.0f, true);
     }
+}
+
+void UCowBoidsComponent::UpdateLaserDetection()
+{
+    bIsLaserActive = false;
+    LaserAttractionPoint = FVector::ZeroVector;
+    
+    // Don't need DetectedPlayer to be in range, just need to find any player with active laser
+    if (!ShepherdComponent)
+    {
+        // Try to find a shepherd component if we don't have one
+        for (TActorIterator<AActor> It(GetWorld()); It; ++It)
+        {
+            AActor* Actor = *It;
+            if (!Actor)
+                continue;
+                
+            UPlayerShepherdComponent* TempShepherdComp = Actor->FindComponentByClass<UPlayerShepherdComponent>();
+            if (TempShepherdComp)
+            {
+                ShepherdComponent = TempShepherdComp;
+                break;
+            }
+        }
+    }
+    
+    if (!ShepherdComponent)
+        return;
+    
+    // Check if laser is active and has valid target
+    if (ShepherdComponent->IsLaserActive() && ShepherdComponent->HasValidLaserTarget())
+    {
+        // Check if we're within range of the laser impact point
+        FVector LaserPoint = ShepherdComponent->GetLaserAttractionPoint();
+        float DistanceToLaser = FVector::Dist(OwnerCharacter->GetActorLocation(), LaserPoint);
+        
+        // Only check distance from cow to laser point, not player to cow
+        if (DistanceToLaser <= ShepherdComponent->LaserAttractionRadius)
+        {
+            bIsLaserActive = true;
+            LaserAttractionPoint = LaserPoint;
+        }
+    }
+}
+
+FVector UCowBoidsComponent::CalculateLaserAttraction()
+{
+    if (!bIsLaserActive || LaserAttractionPoint.IsZero())
+        return FVector::ZeroVector;
+    
+    FVector ToLaserPoint = LaserAttractionPoint - OwnerCharacter->GetActorLocation();
+    ToLaserPoint.Z = 0; // Keep on ground
+    
+    float Distance = ToLaserPoint.Size();
+    
+    // Stop if we're close enough
+    if (Distance <= LaserStopDistance)
+    {
+        // Apply braking force
+        return -CurrentVelocity * 2.0f;
+    }
+    
+    if (Distance > 0)
+    {
+        ToLaserPoint.Normalize();
+        
+        // Calculate desired speed based on distance
+        float DesiredSpeed = LaserAttractionSpeed;
+        if (Distance < LaserSlowdownDistance)
+        {
+            // Slow down as we approach
+            float SlowdownFactor = (Distance - LaserStopDistance) / 
+                                 (LaserSlowdownDistance - LaserStopDistance);
+            DesiredSpeed *= SlowdownFactor;
+        }
+        
+        ToLaserPoint *= DesiredSpeed;
+        
+        return ToLaserPoint - CurrentVelocity;
+    }
+    
+    return FVector::ZeroVector;
 }

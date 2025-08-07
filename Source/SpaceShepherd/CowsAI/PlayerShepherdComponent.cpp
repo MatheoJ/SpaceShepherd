@@ -28,6 +28,9 @@ void UPlayerShepherdComponent::TickComponent(float DeltaTime, ELevelTick TickTyp
 {
     Super::TickComponent(DeltaTime, TickType, ThisTickFunction);
     
+    // Update laser attraction if active
+    UpdateLaserAttraction();
+    
     // Update nearby cows periodically
     UpdateTimer += DeltaTime;
     if (UpdateTimer >= UpdateInterval)
@@ -333,38 +336,74 @@ void UPlayerShepherdComponent::UpdateNearbyCows()
     
     NearbyCows.Empty();
     
-    // Find all cows in the world
-    for (TActorIterator<ACowCharacter> It(GetWorld()); It; ++It)
+    // Handle laser attraction mode separately - it doesn't depend on player distance
+    if (CurrentMode == EShepherdMode::LaserAttraction && bIsLaserActive && bLaserHasValidHit)
     {
-        ACowCharacter* Cow = *It;
-        if (!Cow || Cow == CarriedCow)
-            continue;
-        
-        // Check if cow has boids component and is within its detection radius
-        UCowBoidsComponent* BoidsComp = Cow->FindComponentByClass<UCowBoidsComponent>();
-        if (BoidsComp)
+        // Find all cows within laser attraction radius
+        for (TActorIterator<ACowCharacter> It(GetWorld()); It; ++It)
         {
-            float Distance = FVector::Dist(GetOwner()->GetActorLocation(), Cow->GetActorLocation());
-            if (Distance <= BoidsComp->PlayerDetectionRadius)
+            ACowCharacter* Cow = *It;
+            if (!Cow || Cow == CarriedCow)
+                continue;
+            
+            // Check if cow has boids component
+            UCowBoidsComponent* BoidsComp = Cow->FindComponentByClass<UCowBoidsComponent>();
+            if (!BoidsComp)
+                continue;
+            
+            // Check distance from laser impact point to cow
+            float DistanceToLaser = FVector::Dist(LaserImpactPoint, Cow->GetActorLocation());
+            if (DistanceToLaser <= LaserAttractionRadius)
             {
                 NearbyCows.Add(Cow);
-                
-                // Set cow state based on current mode
-                switch (CurrentMode)
+                // Laser attraction uses the standard attraction flag
+                // The boids component will detect it's laser mode through the shepherd component
+                Cow->SetPlayerAttraction(true);
+            }
+        }
+    }
+    else
+    {
+        // Standard proximity-based modes (attraction/repulsion/neutral)
+        for (TActorIterator<ACowCharacter> It(GetWorld()); It; ++It)
+        {
+            ACowCharacter* Cow = *It;
+            if (!Cow || Cow == CarriedCow)
+                continue;
+            
+            // Check if cow has boids component and is within its detection radius
+            UCowBoidsComponent* BoidsComp = Cow->FindComponentByClass<UCowBoidsComponent>();
+            if (BoidsComp)
+            {
+                // For normal modes, check player-to-cow distance
+                float Distance = FVector::Dist(GetOwner()->GetActorLocation(), Cow->GetActorLocation());
+                if (Distance <= BoidsComp->PlayerDetectionRadius)
                 {
-                    case EShepherdMode::Attraction:
-                        Cow->SetPlayerAttraction(true);
-                        break;
-                    case EShepherdMode::Repulsion:
-                        Cow->SetPlayerRepulsion(true);
-                        break;
-                    case EShepherdMode::Neutral:
-                    default:
-                        // Already cleared above
-                        break;
+                    NearbyCows.Add(Cow);
+                    
+                    // Set cow state based on current mode
+                    switch (CurrentMode)
+                    {
+                        case EShepherdMode::Attraction:
+                            Cow->SetPlayerAttraction(true);
+                            break;
+                        case EShepherdMode::Repulsion:
+                            Cow->SetPlayerRepulsion(true);
+                            break;
+                        case EShepherdMode::Neutral:
+                        default:
+                            // Already cleared above
+                            break;
+                    }
                 }
             }
         }
+    }
+    
+    // Debug logging
+    if (CurrentMode == EShepherdMode::LaserAttraction && bIsLaserActive)
+    {
+        UE_LOG(LogTemp, VeryVerbose, TEXT("Laser Mode: Found %d cows near laser point"), NearbyCows.Num());
     }
 }
 
@@ -438,16 +477,26 @@ void UPlayerShepherdComponent::DrawModeIndicator()
         case EShepherdMode::Repulsion:
             DrawColor = RepulsionColor;
             break;
+        case EShepherdMode::LaserAttraction:
+            DrawColor = LaserColor;
+            break;
         default:
             break;
     }
     
-    // Draw indicator circle around player
-    if (CurrentMode != EShepherdMode::Neutral)
+    // Draw indicator circle around player (except for laser mode)
+    if (CurrentMode != EShepherdMode::Neutral && CurrentMode != EShepherdMode::LaserAttraction)
     {
         // Draw pulsing effect
         float PulseScale = 1.0f + FMath::Sin(GetWorld()->GetTimeSeconds() * 3.0f) * 0.1f;
         DrawDebugSphere(GetWorld(), Location, IndicatorRadius * PulseScale / 3.0f, 16, DrawColor, false, -1, 0, 1);
+    }
+    
+    // Draw laser mode indicator
+    if (CurrentMode == EShepherdMode::LaserAttraction && bIsLaserActive)
+    {
+        // Small indicator around player showing laser mode is active
+        DrawDebugSphere(GetWorld(), Location, 30.0f, 8, LaserColor, false, -1, 0, 1);
     }
     
     // Draw pickup indicator
@@ -628,5 +677,199 @@ void UPlayerShepherdComponent::EnableCowPhysics(ACowCharacter* Cow)
     {
         MovementComp->SetMovementMode(MOVE_Walking);
         MovementComp->SetMovementMode(MOVE_NavWalking);
+    }
+}
+
+void UPlayerShepherdComponent::HandleLaserPressed()
+{
+    StartLaserAttraction();
+}
+
+void UPlayerShepherdComponent::HandleLaserReleased()
+{
+    StopLaserAttraction();
+}
+
+void UPlayerShepherdComponent::StartLaserAttraction()
+{
+    if (bIsLaserActive)
+        return;
+    
+    bIsLaserActive = true;
+    
+    // Set mode to laser attraction
+    SetShepherdMode(EShepherdMode::LaserAttraction);
+}
+
+void UPlayerShepherdComponent::StopLaserAttraction()
+{
+    if (!bIsLaserActive)
+        return;
+    
+    bIsLaserActive = false;
+    bLaserHasValidHit = false;
+    LaserImpactPoint = FVector::ZeroVector;
+    
+    // Return to neutral mode
+    SetShepherdMode(EShepherdMode::Neutral);
+}
+
+void UPlayerShepherdComponent::UpdateLaserAttraction()
+{
+    if (!bIsLaserActive)
+        return;
+    
+    // Perform the laser trace
+    PerformLaserTrace();
+    
+    // Draw the laser visual
+    DrawLaser();
+}
+
+void UPlayerShepherdComponent::PerformLaserTrace()
+{
+    if (!GetOwner())
+        return;
+    
+    ACharacter* OwnerCharacter = Cast<ACharacter>(GetOwner());
+    if (!OwnerCharacter)
+        return;
+    
+    // Get start position and direction for the laser
+    FVector StartPosition = GetLaserStartPosition();
+    FVector LaserDirection = GetLaserDirection();
+    FVector EndPosition = StartPosition + (LaserDirection * LaserMaxRange);
+    
+    // Setup collision query params
+    FCollisionQueryParams QueryParams;
+    QueryParams.AddIgnoredActor(OwnerCharacter);
+    QueryParams.bTraceComplex = false;
+    
+    // Perform the line trace
+    bLaserHasValidHit = GetWorld()->LineTraceSingleByChannel(
+        LaserHitResult,
+        StartPosition,
+        EndPosition,
+        ECC_Visibility,
+        QueryParams
+    );
+    
+    if (bLaserHasValidHit)
+    {
+        LaserImpactPoint = LaserHitResult.ImpactPoint;
+    }
+    else
+    {
+        // If no hit, set impact point at max range
+        LaserImpactPoint = EndPosition;
+    }
+}
+
+FVector UPlayerShepherdComponent::GetLaserStartPosition() const
+{
+    if (!GetOwner())
+        return FVector::ZeroVector;
+    
+    ACharacter* OwnerCharacter = Cast<ACharacter>(GetOwner());
+    if (!OwnerCharacter)
+        return FVector::ZeroVector;
+    
+    // Start from character's location with some height offset
+    FVector StartPos = OwnerCharacter->GetActorLocation();
+    
+    // Offset slightly forward and up to avoid starting inside the character
+    StartPos += OwnerCharacter->GetActorForwardVector() * 50.0f;
+    StartPos += FVector(0, 0, 50.0f); // Height offset
+    
+    return StartPos;
+}
+
+FVector UPlayerShepherdComponent::GetLaserDirection() const
+{
+    if (!GetOwner())
+        return FVector::ForwardVector;
+    
+    ACharacter* OwnerCharacter = Cast<ACharacter>(GetOwner());
+    if (!OwnerCharacter)
+        return FVector::ForwardVector;
+    
+    // Get the camera direction for third person aiming
+    if (APlayerController* PC = Cast<APlayerController>(OwnerCharacter->GetController()))
+    {
+        // Get camera location and rotation
+        FVector CameraLocation;
+        FRotator CameraRotation;
+        PC->GetPlayerViewPoint(CameraLocation, CameraRotation);
+        
+        // Return the camera's forward vector
+        return CameraRotation.Vector();
+    }
+    
+    // Fallback to character forward
+    return OwnerCharacter->GetActorForwardVector();
+}
+
+void UPlayerShepherdComponent::DrawLaser()
+{
+    if (!bIsLaserActive || !GetOwner())
+        return;
+    
+    FVector StartPosition = GetLaserStartPosition();
+    FVector EndPosition = LaserImpactPoint;
+    
+    // Draw the main laser beam
+    DrawDebugLine(
+        GetWorld(),
+        StartPosition,
+        EndPosition,
+        LaserColor,
+        false,
+        -1,
+        0,
+        LaserThickness
+    );
+    
+    // Draw impact point indicator if we hit something
+    if (bLaserHasValidHit && bShowLaserImpactPoint)
+    {
+        // Draw impact sphere
+        DrawDebugSphere(
+            GetWorld(),
+            LaserImpactPoint,
+            LaserImpactSphereSize,
+            12,
+            LaserColor,
+            false,
+            -1,
+            0,
+            2.0f
+        );
+        
+        // Draw attraction radius at impact point
+        DrawDebugSphere(
+            GetWorld(),
+            LaserImpactPoint,
+            LaserAttractionRadius,
+            24,
+            FColor(LaserColor.R, LaserColor.G, LaserColor.B, 64), // Semi-transparent
+            false,
+            -1,
+            0,
+            1.0f
+        );
+        
+        // Add pulsing effect
+        float PulseScale = 1.0f + FMath::Sin(GetWorld()->GetTimeSeconds() * 4.0f) * 0.1f;
+        DrawDebugSphere(
+            GetWorld(),
+            LaserImpactPoint,
+            LaserImpactSphereSize * PulseScale,
+            8,
+            FColor::White,
+            false,
+            -1,
+            0,
+            1.0f
+        );
     }
 }

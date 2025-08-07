@@ -1,4 +1,4 @@
-// CowBoidsComponent.h
+// CowBoidsComponent.h - Updated with Laser Attraction Support
 #pragma once
 
 #include "CoreMinimal.h"
@@ -87,6 +87,19 @@ public:
     
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Boids|Player", meta = (EditCondition = "bSmoothSpeedTransitions"))
     float SpeedTransitionRate = 2.0f;
+    
+    // Laser Attraction Parameters
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Boids|Laser")
+    float LaserAttractionWeight = 2.0f;
+    
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Boids|Laser")
+    float LaserAttractionSpeed = 300.0f;
+    
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Boids|Laser")
+    float LaserStopDistance = 100.0f;
+    
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Boids|Laser")
+    float LaserSlowdownDistance = 300.0f;
 
 private:
     // Internal state
@@ -96,9 +109,12 @@ private:
     class ACharacter* OwnerCharacter;
     class UCharacterMovementComponent* MovementComponent;
     class AActor* DetectedPlayer;
+    class UPlayerShepherdComponent* ShepherdComponent;
     bool bPlayerInRange;
     bool bIsAvoidingObstacle;
     bool bIsAvoidingCliff;
+    bool bIsLaserActive;
+    FVector LaserAttractionPoint;
 
     // Core boids functions
     FVector CalculateSteeringForce(float DeltaTime);
@@ -108,10 +124,12 @@ private:
     FVector CalculateCliffAvoidance();
     FVector CalculatePlayerAttraction();
     FVector CalculatePlayerRepulsion();
+    FVector CalculateLaserAttraction();
     
     // Helper functions
     TArray<AActor*> GetNearbyCows();
     void UpdatePlayerDetection();
+    void UpdateLaserDetection();
     void UpdateMaxSpeed(float DeltaTime);
     bool IsGroundAhead(FVector Direction, float Distance);
     bool IsObstacleAhead(FVector Direction, float Distance);
