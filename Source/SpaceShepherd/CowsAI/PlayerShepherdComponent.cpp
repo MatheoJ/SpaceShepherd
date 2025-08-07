@@ -3,9 +3,16 @@
 #include "CowCharacter.h"
 #include "CowBoidsComponent.h"
 #include "GameFramework/Actor.h"
+#include "GameFramework/Character.h"
+#include "GameFramework/CharacterMovementComponent.h"
+#include "GameFramework/PlayerController.h"
+#include "Components/CapsuleComponent.h"
+#include "Components/PrimitiveComponent.h"
 #include "Engine/World.h"
 #include "DrawDebugHelpers.h"
 #include "EngineUtils.h"
+#include "Kismet/GameplayStatics.h"
+#include "Camera/CameraComponent.h"
 
 UPlayerShepherdComponent::UPlayerShepherdComponent()
 {
@@ -29,12 +36,32 @@ void UPlayerShepherdComponent::TickComponent(float DeltaTime, ELevelTick TickTyp
         UpdateNearbyCows();
     }
     
+    // Update carried cow position
+    if (bIsCarryingCow && CarriedCow)
+    {
+        UpdateCarriedCow(DeltaTime);
+    }
+    
+    // Update throw charge
+    if (bIsChargingThrow)
+    {
+        UpdateThrowCharge(DeltaTime);
+    }
+    
     // Draw visual feedback
     if (bShowModeIndicator)
     {
         DrawModeIndicator();
     }
+    
+    // Draw throw trajectory
+    if (bIsCarryingCow && bIsChargingThrow && bShowThrowTrajectory)
+    {
+        DrawThrowTrajectory();
+    }
 }
+
+// ========== Mode Management ==========
 
 void UPlayerShepherdComponent::SetShepherdMode(EShepherdMode NewMode)
 {
@@ -79,6 +106,189 @@ void UPlayerShepherdComponent::SetNeutralMode()
     SetShepherdMode(EShepherdMode::Neutral);
 }
 
+// ========== Carrying System ==========
+
+void UPlayerShepherdComponent::TryPickupCow()
+{
+    if (bIsCarryingCow)
+    {
+        DropCow();
+        return;
+    }
+    
+    ACowCharacter* CowToPickup = GetCowInPickupRange();
+    if (CowToPickup)
+    {
+        CarriedCow = CowToPickup;
+        bIsCarryingCow = true;
+        
+        // Disable cow's physics and AI
+        DisableCowPhysics(CarriedCow);
+        
+        // Disable the cow's boids behavior
+        if (UCowBoidsComponent* BoidsComp = CarriedCow->FindComponentByClass<UCowBoidsComponent>())
+        {
+            BoidsComp->SetComponentTickEnabled(false);
+        }
+        
+        OnCowPickedUp.Broadcast(CarriedCow);
+    }
+}
+
+void UPlayerShepherdComponent::DropCow()
+{
+    if (!bIsCarryingCow || !CarriedCow)
+        return;
+    
+    // Re-enable cow's physics and AI
+    EnableCowPhysics(CarriedCow);
+    
+    // Re-enable the cow's boids behavior
+    if (UCowBoidsComponent* BoidsComp = CarriedCow->FindComponentByClass<UCowBoidsComponent>())
+    {
+        BoidsComp->SetComponentTickEnabled(true);
+    }
+    
+    // Reset carry state
+    CarriedCow = nullptr;
+    bIsCarryingCow = false;
+    bIsChargingThrow = false;
+    CurrentChargeTime = 0.0f;
+    CurrentThrowPower = 0.0f;
+    
+    OnCowDropped.Broadcast();
+}
+
+bool UPlayerShepherdComponent::CanPickupCow() const
+{
+    return !bIsCarryingCow && GetCowInPickupRange() != nullptr;
+}
+
+ACowCharacter* UPlayerShepherdComponent::GetCowInPickupRange() const
+{
+    if (!GetOwner())
+        return nullptr;
+    
+    ACharacter* OwnerCharacter = Cast<ACharacter>(GetOwner());
+    if (!OwnerCharacter)
+        return nullptr;
+    
+    FVector PlayerLocation = OwnerCharacter->GetActorLocation();
+    FVector PlayerForward = OwnerCharacter->GetActorForwardVector();
+    
+    ACowCharacter* ClosestCow = nullptr;
+    float ClosestDistance = PickupRange;
+    
+    // Find all cows in range
+    for (TActorIterator<ACowCharacter> It(GetWorld()); It; ++It)
+    {
+        ACowCharacter* Cow = *It;
+        if (!Cow)
+            continue;
+        
+        FVector ToCow = Cow->GetActorLocation() - PlayerLocation;
+        float Distance = ToCow.Size();
+        
+        // Check distance
+        if (Distance > PickupRange)
+            continue;
+        
+        // Check angle
+        ToCow.Normalize();
+        float DotProduct = FVector::DotProduct(PlayerForward, ToCow);
+        float Angle = FMath::RadiansToDegrees(FMath::Acos(DotProduct));
+        
+        if (Angle <= PickupAngle && Distance < ClosestDistance)
+        {
+            ClosestCow = Cow;
+            ClosestDistance = Distance;
+        }
+    }
+    
+    return ClosestCow;
+}
+
+// ========== Throwing System ==========
+
+void UPlayerShepherdComponent::StartChargingThrow()
+{
+    if (!bIsCarryingCow || !CarriedCow)
+        return;
+    
+    bIsChargingThrow = true;
+    CurrentChargeTime = 0.0f;
+    CurrentThrowPower = 0.0f;
+}
+
+void UPlayerShepherdComponent::ReleaseThrow()
+{
+    if (!bIsChargingThrow || !bIsCarryingCow || !CarriedCow)
+        return;
+    
+    ThrowCow();
+}
+
+void UPlayerShepherdComponent::CancelThrow()
+{
+    if (!bIsChargingThrow)
+        return;
+    
+    bIsChargingThrow = false;
+    CurrentChargeTime = 0.0f;
+    CurrentThrowPower = 0.0f;
+}
+
+FVector UPlayerShepherdComponent::CalculateThrowVelocity() const
+{
+    if (!GetOwner())
+        return FVector::ZeroVector;
+    
+    ACharacter* OwnerCharacter = Cast<ACharacter>(GetOwner());
+    if (!OwnerCharacter)
+        return FVector::ZeroVector;
+    
+    FVector ThrowDirection;
+    
+    // Use camera direction if enabled and available
+    if (bUseCameraDirection)
+    {
+        if (APlayerController* PC = Cast<APlayerController>(OwnerCharacter->GetController()))
+        {
+            // Get the control rotation (where the camera is looking)
+            FRotator CameraRotation = PC->GetControlRotation();
+            
+            // Add upward angle to the camera direction
+            CameraRotation.Pitch += ThrowUpwardAngle;
+            
+            // Convert to direction vector
+            ThrowDirection = CameraRotation.Vector();
+        }
+        else
+        {
+            // Fallback to character forward if no player controller
+            ThrowDirection = OwnerCharacter->GetActorForwardVector();
+            FRotator ThrowRotation = ThrowDirection.Rotation();
+            ThrowRotation.Pitch += ThrowUpwardAngle;
+            ThrowDirection = ThrowRotation.Vector();
+        }
+    }
+    else
+    {
+        // Use character forward direction
+        ThrowDirection = OwnerCharacter->GetActorForwardVector();
+        FRotator ThrowRotation = ThrowDirection.Rotation();
+        ThrowRotation.Pitch += ThrowUpwardAngle;
+        ThrowDirection = ThrowRotation.Vector();
+    }
+    
+    // Calculate throw speed based on charge
+    float ThrowSpeed = FMath::Lerp(MinThrowSpeed, MaxThrowSpeed, CurrentThrowPower);
+    
+    return ThrowDirection * ThrowSpeed;
+}
+
+// ========== Input Handlers ==========
+
 void UPlayerShepherdComponent::HandleAttractionInput()
 {
     ToggleAttractionMode();
@@ -89,15 +299,32 @@ void UPlayerShepherdComponent::HandleRepulsionInput()
     ToggleRepulsionMode();
 }
 
+void UPlayerShepherdComponent::HandlePickupInput()
+{
+    TryPickupCow();
+}
+
+void UPlayerShepherdComponent::HandleThrowPressed()
+{
+    StartChargingThrow();
+}
+
+void UPlayerShepherdComponent::HandleThrowReleased()
+{
+    ReleaseThrow();
+}
+
+// ========== Private Helper Functions ==========
+
 void UPlayerShepherdComponent::UpdateNearbyCows()
 {
     if (!GetOwner())
         return;
-        
+    
     // Clear previous cow states
     for (ACowCharacter* Cow : NearbyCows)
     {
-        if (IsValid(Cow))
+        if (IsValid(Cow) && Cow != CarriedCow)
         {
             Cow->SetPlayerAttraction(false);
             Cow->SetPlayerRepulsion(false);
@@ -110,9 +337,9 @@ void UPlayerShepherdComponent::UpdateNearbyCows()
     for (TActorIterator<ACowCharacter> It(GetWorld()); It; ++It)
     {
         ACowCharacter* Cow = *It;
-        if (!Cow)
+        if (!Cow || Cow == CarriedCow)
             continue;
-            
+        
         // Check if cow has boids component and is within its detection radius
         UCowBoidsComponent* BoidsComp = Cow->FindComponentByClass<UCowBoidsComponent>();
         if (BoidsComp)
@@ -141,11 +368,65 @@ void UPlayerShepherdComponent::UpdateNearbyCows()
     }
 }
 
+void UPlayerShepherdComponent::UpdateCarriedCow(float DeltaTime)
+{
+    if (!CarriedCow || !GetOwner())
+        return;
+    
+    // Calculate target position
+    FVector TargetPosition = GetCarryPosition();
+    
+    // Smoothly move cow to carry position
+    FVector CurrentPosition = CarriedCow->GetActorLocation();
+    FVector NewPosition = FMath::VInterpTo(CurrentPosition, TargetPosition, DeltaTime, CarryInterpSpeed);
+    
+    CarriedCow->SetActorLocation(NewPosition);
+    
+    // Update cow rotation
+    ACharacter* OwnerCharacter = Cast<ACharacter>(GetOwner());
+    if (OwnerCharacter)
+    {
+        FRotator TargetRotation;
+        
+        // Use camera rotation if enabled and available
+        if (bUseCameraDirection)
+        {
+            if (APlayerController* PC = Cast<APlayerController>(OwnerCharacter->GetController()))
+            {
+                TargetRotation = PC->GetControlRotation();
+                // Don't rotate cow up/down with camera pitch
+                TargetRotation.Pitch = 0;
+            }
+            else
+            {
+                // Fallback to character rotation
+                TargetRotation = OwnerCharacter->GetActorRotation();
+            }
+        }
+        else
+        {
+            // Use character rotation
+            TargetRotation = OwnerCharacter->GetActorRotation();
+        }
+        
+        FRotator CurrentRotation = CarriedCow->GetActorRotation();
+        FRotator NewRotation = FMath::RInterpTo(CurrentRotation, TargetRotation, DeltaTime, CarryInterpSpeed);
+        CarriedCow->SetActorRotation(NewRotation);
+    }
+}
+
+void UPlayerShepherdComponent::UpdateThrowCharge(float DeltaTime)
+{
+    CurrentChargeTime += DeltaTime;
+    CurrentChargeTime = FMath::Min(CurrentChargeTime, MaxChargeTime);
+    CurrentThrowPower = CurrentChargeTime / MaxChargeTime;
+}
+
 void UPlayerShepherdComponent::DrawModeIndicator()
 {
     if (!GetOwner())
         return;
-        
+    
     FVector Location = GetOwner()->GetActorLocation();
     FColor DrawColor = NeutralColor;
     
@@ -163,9 +444,189 @@ void UPlayerShepherdComponent::DrawModeIndicator()
     
     // Draw indicator circle around player
     if (CurrentMode != EShepherdMode::Neutral)
-    {        
+    {
         // Draw pulsing effect
         float PulseScale = 1.0f + FMath::Sin(GetWorld()->GetTimeSeconds() * 3.0f) * 0.1f;
-        DrawDebugSphere(GetWorld(), Location, IndicatorRadius * PulseScale /3.0f, 16, DrawColor, false, -1, 0, 1);
+        DrawDebugSphere(GetWorld(), Location, IndicatorRadius * PulseScale / 3.0f, 16, DrawColor, false, -1, 0, 1);
+    }
+    
+    // Draw pickup indicator
+    if (!bIsCarryingCow)
+    {
+        ACowCharacter* CowInRange = GetCowInPickupRange();
+        if (CowInRange)
+        {
+            // Highlight the cow that can be picked up
+            DrawDebugSphere(GetWorld(), CowInRange->GetActorLocation(), 50.0f, 8, FColor::Cyan, false, -1, 0, 2);
+        }
+    }
+    
+    // Draw throw power indicator
+    if (bIsCarryingCow && bIsChargingThrow)
+    {
+        FVector BarStart = Location + FVector(0, 0, 200);
+        FVector BarEnd = BarStart + FVector(100 * CurrentThrowPower, 0, 0);
+        FColor PowerColor = FColor::MakeRedToGreenColorFromScalar(CurrentThrowPower);
+        DrawDebugLine(GetWorld(), BarStart, BarEnd, PowerColor, false, -1, 0, 10);
+    }
+}
+
+void UPlayerShepherdComponent::DrawThrowTrajectory()
+{
+    if (!CarriedCow || !GetOwner())
+        return;
+    
+    FVector StartLocation = CarriedCow->GetActorLocation();
+    FVector InitialVelocity = CalculateThrowVelocity();
+    
+    TrajectoryPointsCache.Empty();
+    
+    // Simulate trajectory
+    for (int32 i = 0; i < TrajectoryPoints; i++)
+    {
+        float Time = i * TrajectoryTimeStep;
+        
+        // Physics equation: s = ut + 0.5at^2
+        FVector Point = StartLocation + InitialVelocity * Time;
+        Point.Z += 0.5f * GetWorld()->GetGravityZ() * Time * Time;
+        
+        TrajectoryPointsCache.Add(Point);
+        
+        // Draw point
+        DrawDebugSphere(GetWorld(), Point, 5.0f, 4, FColor::Yellow, false, -1, 0, 1);
+        
+        // Draw line between points
+        if (i > 0)
+        {
+            DrawDebugLine(GetWorld(), TrajectoryPointsCache[i-1], Point, FColor::Yellow, false, -1, 0, 2);
+        }
+    }
+}
+
+void UPlayerShepherdComponent::ThrowCow()
+{
+    if (!CarriedCow)
+        return;
+    
+    // Calculate throw velocity
+    FVector ThrowVelocity = CalculateThrowVelocity();
+    
+    // Re-enable physics
+    EnableCowPhysics(CarriedCow);
+    
+    // Apply throw velocity
+    if (UCharacterMovementComponent* MovementComp = CarriedCow->GetCharacterMovement())
+    {
+        MovementComp->Velocity = ThrowVelocity;
+        MovementComp->SetMovementMode(MOVE_Falling);
+        
+        // Add some rotation for visual effect
+        CarriedCow->GetCapsuleComponent()->SetPhysicsAngularVelocityInDegrees(FVector(0, 360, 0));
+    }
+    
+    // Re-enable the cow's boids behavior (with a delay to let it land)
+    if (UCowBoidsComponent* BoidsComp = CarriedCow->FindComponentByClass<UCowBoidsComponent>())
+    {
+        FTimerHandle EnableBoidsTimer;
+        GetWorld()->GetTimerManager().SetTimer(EnableBoidsTimer, [BoidsComp]()
+        {
+            BoidsComp->SetComponentTickEnabled(true);
+        }, 2.0f, false);
+    }
+    
+    // Broadcast throw event
+    OnCowThrown.Broadcast(CarriedCow, CurrentThrowPower);
+    
+    // Reset state
+    CarriedCow = nullptr;
+    bIsCarryingCow = false;
+    bIsChargingThrow = false;
+    CurrentChargeTime = 0.0f;
+    CurrentThrowPower = 0.0f;
+}
+
+FVector UPlayerShepherdComponent::GetCarryPosition() const
+{
+    if (!GetOwner())
+        return FVector::ZeroVector;
+    
+    ACharacter* OwnerCharacter = Cast<ACharacter>(GetOwner());
+    if (!OwnerCharacter)
+        return FVector::ZeroVector;
+    
+    FVector Position = OwnerCharacter->GetActorLocation();
+    FVector ForwardVector;
+    FVector RightVector;
+    
+    // Use camera direction if enabled
+    if (bUseCameraDirection)
+    {
+        if (APlayerController* PC = Cast<APlayerController>(OwnerCharacter->GetController()))
+        {
+            FRotator CameraRotation = PC->GetControlRotation();
+            // Dampen pitch to keep carry position more level
+            CameraRotation.Pitch = FMath::Clamp(CameraRotation.Pitch, -30.0f, 30.0f) * CarryPitchDamping;
+            
+            ForwardVector = CameraRotation.Vector();
+            RightVector = FRotationMatrix(CameraRotation).GetScaledAxis(EAxis::Y);
+        }
+        else
+        {
+            // Fallback to character orientation
+            ForwardVector = OwnerCharacter->GetActorForwardVector();
+            RightVector = OwnerCharacter->GetActorRightVector();
+        }
+    }
+    else
+    {
+        // Use character orientation
+        ForwardVector = OwnerCharacter->GetActorForwardVector();
+        RightVector = OwnerCharacter->GetActorRightVector();
+    }
+    
+    // Calculate position based on direction vectors
+    Position += ForwardVector * CarryOffset.X;
+    Position += RightVector * CarryOffset.Y;
+    Position += FVector::UpVector * CarryOffset.Z;
+    
+    return Position;
+}
+
+void UPlayerShepherdComponent::DisableCowPhysics(ACowCharacter* Cow)
+{
+    if (!Cow)
+        return;
+    
+    // Disable collision
+    if (UCapsuleComponent* Capsule = Cow->GetCapsuleComponent())
+    {
+        Capsule->SetCollisionEnabled(ECollisionEnabled::NoCollision);
+    }
+    
+    // Stop movement
+    if (UCharacterMovementComponent* MovementComp = Cow->GetCharacterMovement())
+    {
+        MovementComp->StopMovementImmediately();
+        MovementComp->SetMovementMode(MOVE_None);
+        MovementComp->DisableMovement();
+    }
+}
+
+void UPlayerShepherdComponent::EnableCowPhysics(ACowCharacter* Cow)
+{
+    if (!Cow)
+        return;
+    
+    // Re-enable collision
+    if (UCapsuleComponent* Capsule = Cow->GetCapsuleComponent())
+    {
+        Capsule->SetCollisionEnabled(ECollisionEnabled::QueryAndPhysics);
+    }
+    
+    // Re-enable movement
+    if (UCharacterMovementComponent* MovementComp = Cow->GetCharacterMovement())
+    {
+        MovementComp->SetMovementMode(MOVE_Walking);
+        MovementComp->SetMovementMode(MOVE_NavWalking);
     }
 }

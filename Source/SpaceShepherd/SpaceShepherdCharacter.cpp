@@ -1,3 +1,4 @@
+// SpaceShepherdCharacter.cpp
 // Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "SpaceShepherdCharacter.h"
@@ -55,14 +56,16 @@ ASpaceShepherdCharacter::ASpaceShepherdCharacter()
 	// Note: The skeletal mesh and anim blueprint references on the Mesh component (inherited from Character) 
 	// are set in the derived blueprint asset named ThirdPersonCharacter (to avoid direct content references in C++)
 
+	// Create Shepherd Component
 	ShepherdComponent = CreateDefaultSubobject<UPlayerShepherdComponent>(TEXT("ShepherdComponent"));
-
 }
 
 void ASpaceShepherdCharacter::SetupPlayerInputComponent(UInputComponent* PlayerInputComponent)
 {
 	// Set up action bindings
-	if (UEnhancedInputComponent* EnhancedInputComponent = Cast<UEnhancedInputComponent>(PlayerInputComponent)) {
+	if (UEnhancedInputComponent* EnhancedInputComponent = Cast<UEnhancedInputComponent>(PlayerInputComponent)) 
+	{
+		// ========== Movement Actions ==========
 		
 		// Jumping
 		EnhancedInputComponent->BindAction(JumpAction, ETriggerEvent::Started, this, &ACharacter::Jump);
@@ -70,10 +73,43 @@ void ASpaceShepherdCharacter::SetupPlayerInputComponent(UInputComponent* PlayerI
 
 		// Moving
 		EnhancedInputComponent->BindAction(MoveAction, ETriggerEvent::Triggered, this, &ASpaceShepherdCharacter::Move);
-		EnhancedInputComponent->BindAction(MouseLookAction, ETriggerEvent::Triggered, this, &ASpaceShepherdCharacter::Look);
-
+		
 		// Looking
 		EnhancedInputComponent->BindAction(LookAction, ETriggerEvent::Triggered, this, &ASpaceShepherdCharacter::Look);
+		EnhancedInputComponent->BindAction(MouseLookAction, ETriggerEvent::Triggered, this, &ASpaceShepherdCharacter::Look);
+		
+		// ========== Shepherd Mode Actions ==========
+		
+		// Mode switching
+		if (AttractionAction)
+		{
+			EnhancedInputComponent->BindAction(AttractionAction, ETriggerEvent::Started, this, &ASpaceShepherdCharacter::OnAttractionPressed);
+		}
+		
+		if (RepulsionAction)
+		{
+			EnhancedInputComponent->BindAction(RepulsionAction, ETriggerEvent::Started, this, &ASpaceShepherdCharacter::OnRepulsionPressed);
+		}
+		
+		if (NeutralAction)
+		{
+			EnhancedInputComponent->BindAction(NeutralAction, ETriggerEvent::Started, this, &ASpaceShepherdCharacter::OnNeutralPressed);
+		}
+		
+		// ========== Cow Interaction Actions ==========
+		
+		// Pickup/Drop
+		if (PickupAction)
+		{
+			EnhancedInputComponent->BindAction(PickupAction, ETriggerEvent::Started, this, &ASpaceShepherdCharacter::OnPickupPressed);
+		}
+		
+		// Throw (Hold to charge)
+		if (ThrowAction)
+		{
+			EnhancedInputComponent->BindAction(ThrowAction, ETriggerEvent::Started, this, &ASpaceShepherdCharacter::OnThrowPressed);
+			EnhancedInputComponent->BindAction(ThrowAction, ETriggerEvent::Completed, this, &ASpaceShepherdCharacter::OnThrowReleased);
+		}
 	}
 	else
 	{
@@ -157,6 +193,7 @@ void ASpaceShepherdCharacter::OnAttractionPressed()
 	if (ShepherdComponent)
 	{
 		ShepherdComponent->HandleAttractionInput();
+		UE_LOG(LogTemplateCharacter, Log, TEXT("Attraction mode toggled"));
 	}
 }
 
@@ -165,6 +202,7 @@ void ASpaceShepherdCharacter::OnRepulsionPressed()
 	if (ShepherdComponent)
 	{
 		ShepherdComponent->HandleRepulsionInput();
+		UE_LOG(LogTemplateCharacter, Log, TEXT("Repulsion mode toggled"));
 	}
 }
 
@@ -173,5 +211,42 @@ void ASpaceShepherdCharacter::OnNeutralPressed()
 	if (ShepherdComponent)
 	{
 		ShepherdComponent->SetNeutralMode();
+		UE_LOG(LogTemplateCharacter, Log, TEXT("Neutral mode set"));
+	}
+}
+
+void ASpaceShepherdCharacter::OnPickupPressed()
+{
+	if (ShepherdComponent)
+	{
+		ShepherdComponent->HandlePickupInput();
+		
+		// Log pickup state
+		if (ShepherdComponent->bIsCarryingCow)
+		{
+			UE_LOG(LogTemplateCharacter, Log, TEXT("Picked up cow"));
+		}
+		else
+		{
+			UE_LOG(LogTemplateCharacter, Log, TEXT("Dropped cow or no cow to pickup"));
+		}
+	}
+}
+
+void ASpaceShepherdCharacter::OnThrowPressed()
+{
+	if (ShepherdComponent)
+	{
+		ShepherdComponent->HandleThrowPressed();
+		UE_LOG(LogTemplateCharacter, Log, TEXT("Started charging throw"));
+	}
+}
+
+void ASpaceShepherdCharacter::OnThrowReleased()
+{
+	if (ShepherdComponent)
+	{
+		ShepherdComponent->HandleThrowReleased();
+		UE_LOG(LogTemplateCharacter, Log, TEXT("Released throw with power: %.2f"), ShepherdComponent->GetCurrentThrowPower());
 	}
 }
