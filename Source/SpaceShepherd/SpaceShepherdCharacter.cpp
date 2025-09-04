@@ -15,8 +15,17 @@
 
 DEFINE_LOG_CATEGORY(LogTemplateCharacter);
 
-void ASpaceShepherdCharacter::OnGravityChanged()
+void ASpaceShepherdCharacter::Tick(float DeltaSeconds)
 {
+    Super::Tick(DeltaSeconds);
+	
+    const FVector GravityUp = -GetCharacterMovement()->GetGravityDirection();
+    const FVector CameraForward = CameraRoot->GetForwardVector();
+	// project to plane orthogonal to gravity
+    const FVector ProjectedForward = (CameraForward - FVector::DotProduct(CameraForward, GravityUp) * GravityUp).GetSafeNormal();
+	const FQuat Rotation = FRotationMatrix::MakeFromXZ(ProjectedForward, GravityUp).ToQuat();
+
+	CameraRoot->SetWorldLocationAndRotation(GetActorLocation(), Rotation);
 }
 
 ASpaceShepherdCharacter::ASpaceShepherdCharacter()
@@ -42,22 +51,24 @@ ASpaceShepherdCharacter::ASpaceShepherdCharacter()
 	GetCharacterMovement()->BrakingDecelerationWalking = 2000.f;
 	GetCharacterMovement()->BrakingDecelerationFalling = 1500.0f;
 
-	// Create a camera boom (pulls in towards the player if there is a collision)
+	CameraRoot = CreateDefaultSubobject<USceneComponent>(TEXT("CameraRoot"));
 	CameraBoom = CreateDefaultSubobject<USpringArmComponent>(TEXT("CameraBoom"));
-	CameraBoom->SetupAttachment(RootComponent);
+	CameraBoom->SetupAttachment(CameraRoot);
 	CameraBoom->TargetArmLength = 400.0f;
-	CameraBoom->bUsePawnControlRotation = true;
-
-	// Create a follow camera
+	CameraBoom->bUsePawnControlRotation = false;
 	FollowCamera = CreateDefaultSubobject<UCameraComponent>(TEXT("FollowCamera"));
 	FollowCamera->SetupAttachment(CameraBoom, USpringArmComponent::SocketName);
 	FollowCamera->bUsePawnControlRotation = false;
-
-	// Note: The skeletal mesh and anim blueprint references on the Mesh component (inherited from Character) 
-	// are set in the derived blueprint asset named ThirdPersonCharacter (to avoid direct content references in C++)
-
-	// Create Shepherd Component
+	
 	ShepherdComponent = CreateDefaultSubobject<UPlayerShepherdComponent>(TEXT("ShepherdComponent"));
+}
+
+void ASpaceShepherdCharacter::BeginPlay()
+{
+	Super::BeginPlay();
+
+	const FDetachmentTransformRules Rules(EDetachmentRule::KeepWorld, false);
+	CameraRoot->DetachFromComponent(Rules);
 }
 
 void ASpaceShepherdCharacter::SetupPlayerInputComponent(UInputComponent* PlayerInputComponent)
@@ -176,12 +187,15 @@ void ASpaceShepherdCharacter::DoMove(float Right, float Forward)
 
 void ASpaceShepherdCharacter::DoLook(float Yaw, float Pitch)
 {
-	if (GetController() != nullptr)
-	{
-		// add yaw and pitch input to controller
-		AddControllerYawInput(Yaw);
-		AddControllerPitchInput(Pitch);
-	}
+	const FRotator& BoomRotation = CameraBoom->GetRelativeRotation();
+	
+	const FRotator NewRotation = FRotator(
+		FMath::Clamp(BoomRotation.Pitch - Pitch, -80.0f, 80.0f),
+		BoomRotation.Yaw + Yaw,
+		0.0f
+	);
+	
+	CameraBoom->SetRelativeRotation(NewRotation);
 }
 
 void ASpaceShepherdCharacter::DoJumpStart()

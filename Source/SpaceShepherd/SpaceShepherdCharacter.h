@@ -1,6 +1,3 @@
-// SpaceShepherdCharacter.h
-// Copyright Epic Games, Inc. All Rights Reserved.
-
 #pragma once
 
 #include "CoreMinimal.h"
@@ -24,6 +21,9 @@ class ASpaceShepherdCharacter : public ACharacter
 {
     GENERATED_BODY()
 
+    UPROPERTY(VisibleAnywhere, Category = "Camera")
+    USceneComponent* CameraRoot;
+    
     /** Camera boom positioning the camera behind the character */
     UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = Camera, meta = (AllowPrivateAccess = "true"))
     USpringArmComponent* CameraBoom;
@@ -31,11 +31,10 @@ class ASpaceShepherdCharacter : public ACharacter
     /** Follow camera */
     UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = Camera, meta = (AllowPrivateAccess = "true"))
     UCameraComponent* FollowCamera;
-
-    UFUNCTION(BlueprintCallable, Category = "Input")
-    void OnGravityChanged();
     
 protected:
+
+    virtual void Tick(float DeltaSeconds) override;
 
     // ========== Input Actions ==========
     
@@ -126,6 +125,7 @@ public:
 
 protected:
 
+    virtual void BeginPlay() override;
     /** Initialize input action bindings */
     virtual void SetupPlayerInputComponent(class UInputComponent* PlayerInputComponent) override;
 
