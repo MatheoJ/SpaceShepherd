@@ -21,7 +21,6 @@ void ASpaceShepherdCharacter::Tick(float DeltaSeconds)
 	
     const FVector GravityUp = -GetCharacterMovement()->GetGravityDirection();
     const FVector CameraForward = CameraRoot->GetForwardVector();
-	// project to plane orthogonal to gravity
     const FVector ProjectedForward = (CameraForward - FVector::DotProduct(CameraForward, GravityUp) * GravityUp).GetSafeNormal();
 	const FQuat Rotation = FRotationMatrix::MakeFromXZ(ProjectedForward, GravityUp).ToQuat();
 
