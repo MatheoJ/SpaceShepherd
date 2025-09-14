@@ -1,14 +1,11 @@
+// SphericalTrain.cpp
 #include "SphericalTrain.h"
-#include "Components/SplineComponent.h"
-#include "Components/StaticMeshComponent.h"
-#include "Kismet/KismetMathLibrary.h"
 #include "DrawDebugHelpers.h"
 #include "Engine/Engine.h"
+#include "Kismet/KismetMathLibrary.h"
 
 #if WITH_EDITOR
 #include "Editor.h"
-#include "EditorViewportClient.h"
-#include "LevelEditorViewport.h"
 #endif
 
 ASphericalTrain::ASphericalTrain()
@@ -19,74 +16,26 @@ ASphericalTrain::ASphericalTrain()
     RootSceneComponent = CreateDefaultSubobject<USceneComponent>(TEXT("RootScene"));
     RootComponent = RootSceneComponent;
 
-    // Create spline component
-    PathSpline = CreateDefaultSubobject<USplineComponent>(TEXT("PathSpline"));
+    // Create spherical spline component
+    PathSpline = CreateDefaultSubobject<USphericalSplineComponent>(TEXT("PathSpline"));
     PathSpline->SetupAttachment(RootComponent);
-    PathSpline->SetClosedLoop(true);
     
-    // Make spline editable in editor
-    PathSpline->bDrawDebug = true;
-    PathSpline->bInputSplinePointsToConstructionScript = true;
-    PathSpline->bShouldVisualizeScale = true;
-    PathSpline->ScaleVisualizationWidth = 30.0f;
-
     // Create train mesh
     TrainMesh = CreateDefaultSubobject<UStaticMeshComponent>(TEXT("TrainMesh"));
     TrainMesh->SetupAttachment(RootComponent);
     TrainMesh->SetRelativeLocation(FVector(0, 0, 0));
-    
-    // Set default editor colors
-    PathSpline->EditorUnselectedSplineSegmentColor = FLinearColor(1.0f, 1.0f, 0.0f); // Yellow
-    PathSpline->EditorSelectedSplineSegmentColor = FLinearColor(1.0f, 0.5f, 0.0f); // Orange
 }
 
 void ASphericalTrain::OnConstruction(const FTransform& Transform)
 {
     Super::OnConstruction(Transform);
     
-    bIsEditorPreview = true;
+    bIsInEditor = true;
     
-    // Update spline settings
-    UpdateSplineSettings();
-    
-    // Auto-generate circular path if requested
-    if (bGenerateCircularPath && PathSpline->GetNumberOfSplinePoints() < 2)
-    {
-        SetupSplineAroundPlanet();
-    }
-    
-    // Auto-snap points to surface if enabled
-    if (bAutoSnapToSurface && PlanetActor)
-    {
-        for (int32 i = 0; i < PathSpline->GetNumberOfSplinePoints(); i++)
-        {
-            FVector CurrentLocation = PathSpline->GetLocationAtSplinePoint(i, ESplineCoordinateSpace::World);
-            SnapSplinePointToPlanetSurface(i, CurrentLocation);
-        }
-        PathSpline->UpdateSpline();
-    }
-    
-    // Update spline info
-    SplineLength = PathSpline->GetSplineLength();
-    SplinePointCount = PathSpline->GetNumberOfSplinePoints();
-    
-    // Preview train position in editor
-    if (bShowTrainPreview)
+    // Update preview if enabled
+    if (bShowTrainPreview && PathSpline)
     {
         PreviewTrainPosition();
-    }
-    
-    // Handle action buttons
-    if (bSnapAllPoints)
-    {
-        SnapAllPointsToSurface();
-        bSnapAllPoints = false;
-    }
-    
-    if (bClearSpline)
-    {
-        ClearSplinePoints();
-        bClearSpline = false;
     }
 }
 
@@ -100,56 +49,10 @@ void ASphericalTrain::PostEditChangeProperty(FPropertyChangedEvent& PropertyChan
     
     FName PropertyName = PropertyChangedEvent.Property->GetFName();
     
-    // Handle property changes
-    if (PropertyName == GET_MEMBER_NAME_CHECKED(ASphericalTrain, PlanetActor) ||
-        PropertyName == GET_MEMBER_NAME_CHECKED(ASphericalTrain, PlanetRadius) ||
-        PropertyName == GET_MEMBER_NAME_CHECKED(ASphericalTrain, SplineHeightOffset))
-    {
-        if (bAutoSnapToSurface)
-        {
-            SnapAllPointsToSurface();
-        }
-    }
-    else if (PropertyName == GET_MEMBER_NAME_CHECKED(ASphericalTrain, bGenerateCircularPath))
-    {
-        if (bGenerateCircularPath)
-        {
-            GenerateCircularSpline();
-        }
-    }
-    else if (PropertyName == GET_MEMBER_NAME_CHECKED(ASphericalTrain, InitialPositionRatio))
+    if (PropertyName == GET_MEMBER_NAME_CHECKED(ASphericalTrain, InitialPositionRatio) ||
+        PropertyName == GET_MEMBER_NAME_CHECKED(ASphericalTrain, bShowTrainPreview))
     {
         PreviewTrainPosition();
-    }
-    else if (PropertyName == GET_MEMBER_NAME_CHECKED(ASphericalTrain, bClosedLoop))
-    {
-        PathSpline->SetClosedLoop(bClosedLoop);
-        PathSpline->UpdateSpline();
-        SplineLength = PathSpline->GetSplineLength();
-    }
-    else if (PropertyName == GET_MEMBER_NAME_CHECKED(ASphericalTrain, SplineTangentScale))
-    {
-        // Update all tangent scales
-        for (int32 i = 0; i < PathSpline->GetNumberOfSplinePoints(); i++)
-        {
-            PathSpline->SetTangentAtSplinePoint(i, 
-                PathSpline->GetTangentAtSplinePoint(i, ESplineCoordinateSpace::Local) * SplineTangentScale,
-                ESplineCoordinateSpace::Local);
-        }
-        PathSpline->UpdateSpline();
-    }
-    
-    // Update visualization
-    UpdateSplineSettings();
-}
-
-void ASphericalTrain::PostEditMove(bool bFinished)
-{
-    Super::PostEditMove(bFinished);
-    
-    if (bFinished && bAutoSnapToSurface)
-    {
-        SnapAllPointsToSurface();
     }
 }
 #endif
@@ -158,34 +61,40 @@ void ASphericalTrain::BeginPlay()
 {
     Super::BeginPlay();
     
-    bIsEditorPreview = false;
+    bIsInEditor = false;
     
-    // Get initial spline length
-    SplineLength = PathSpline->GetSplineLength();
-    SplinePointCount = PathSpline->GetNumberOfSplinePoints();
+    if (!PathSpline)
+    {
+        UE_LOG(LogTemp, Error, TEXT("SphericalTrain: No PathSpline component found!"));
+        return;
+    }
     
-    // Set initial position based on InitialPositionRatio
-    CurrentSplineDistance = SplineLength * FMath::Clamp(InitialPositionRatio, 0.0f, 1.0f);
-    
-    // Initialize rotation
+    // Set initial position
+    float SplineLength = PathSpline->GetSplineLength();
     if (SplineLength > 0)
     {
-        FVector InitialLocation = PathSpline->GetLocationAtDistanceAlongSpline(CurrentSplineDistance, ESplineCoordinateSpace::World);
-        FVector InitialDirection = PathSpline->GetDirectionAtDistanceAlongSpline(CurrentSplineDistance, ESplineCoordinateSpace::World);
+        CurrentSplineDistance = SplineLength * FMath::Clamp(InitialPositionRatio, 0.0f, 1.0f);
+        SetTrainPosition(CurrentSplineDistance);
+        
+        // Initialize rotation
+        FVector InitialLocation = PathSpline->GetLocationAtDistanceAlongSpline(
+            CurrentSplineDistance, ESplineCoordinateSpace::World);
+        FVector InitialDirection = PathSpline->GetDirectionAtDistanceAlongSpline(
+            CurrentSplineDistance, ESplineCoordinateSpace::World);
+        
         CurrentRotation = CalculateTargetRotation(InitialLocation, InitialDirection);
         LastSplineDirection = InitialDirection;
         
-        // Set initial position and rotation
         TrainMesh->SetWorldLocation(InitialLocation);
         TrainMesh->SetWorldRotation(CurrentRotation);
     }
     
-    // Setup train cars
-    for (int32 i = 0; i < TrainCars.Num(); i++)
+    // Setup train cars mobility
+    for (UStaticMeshComponent* Car : TrainCars)
     {
-        if (TrainCars[i])
+        if (Car)
         {
-            TrainCars[i]->SetMobility(EComponentMobility::Movable);
+            Car->SetMobility(EComponentMobility::Movable);
         }
     }
 }
@@ -194,326 +103,41 @@ void ASphericalTrain::Tick(float DeltaTime)
 {
     Super::Tick(DeltaTime);
     
-    if (!bIsEditorPreview && bIsMoving && SplineLength > 0)
+    // Update movement if not in editor
+    if (!bIsInEditor && bIsMoving && PathSpline && PathSpline->GetSplineLength() > 0)
     {
         UpdateTrainMovement(DeltaTime);
-        UpdateTrainOrientationImproved(DeltaTime);
-        UpdateTrainCarsImproved(DeltaTime);
+        UpdateTrainOrientation(DeltaTime);
+        UpdateTrainCars(DeltaTime);
     }
     
-    if (bShowDebugInfo || bShowDebugSpline || bShowOrientationVectors)
+    // Preview in play mode if enabled
+    if (bIsInEditor && bPreviewInPlayMode && PathSpline)
+    {
+        PreviewTrainPosition();
+    }
+    
+    // Draw debug visualization
+    if (bShowDebugInfo || bShowOrientationVectors || bShowMovementPath)
     {
         DrawDebugVisualization();
     }
 }
 
-void ASphericalTrain::UpdateSplineSettings()
-{
-    if (!PathSpline) return;
-    
-    // Update spline visualization settings
-    PathSpline->bDrawDebug = bShowSplineInEditor;
-    PathSpline->SetClosedLoop(bClosedLoop);
-    PathSpline->EditorUnselectedSplineSegmentColor = FLinearColor(SplineEditorColor);
-    PathSpline->SetUnselectedSplineSegmentColor(SplineEditorColor);
-    
-    // Update spline
-    PathSpline->UpdateSpline();
-    SplineLength = PathSpline->GetSplineLength();
-    SplinePointCount = PathSpline->GetNumberOfSplinePoints();
-}
-
-void ASphericalTrain::PreviewTrainPosition()
-{
-    if (!TrainMesh || SplineLength <= 0) return;
-    
-    // Calculate preview position
-    float PreviewDistance = SplineLength * FMath::Clamp(InitialPositionRatio, 0.0f, 1.0f);
-    
-    // Get position and direction
-    FVector PreviewLocation = PathSpline->GetLocationAtDistanceAlongSpline(PreviewDistance, ESplineCoordinateSpace::World);
-    FVector PreviewDirection = PathSpline->GetDirectionAtDistanceAlongSpline(PreviewDistance, ESplineCoordinateSpace::World);
-    
-    // Calculate rotation
-    FQuat PreviewRotation = CalculateTargetRotation(PreviewLocation, PreviewDirection);
-    
-    // Apply rotation offset
-    if (!TrainRotationOffset.IsZero())
-    {
-        PreviewRotation = PreviewRotation * FQuat(TrainRotationOffset);
-    }
-    
-    // Set preview transform
-    TrainMesh->SetWorldLocation(PreviewLocation);
-    TrainMesh->SetWorldRotation(PreviewRotation);
-    
-    // Update train cars preview
-    for (int32 i = 0; i < TrainCars.Num(); i++)
-    {
-        if (!TrainCars[i]) continue;
-        
-        float CarDistance = PreviewDistance - (CarSeparationDistance * (i + 1));
-        
-        if (bLoopMovement)
-        {
-            CarDistance = FMath::Fmod(CarDistance + SplineLength * 2, SplineLength);
-            if (CarDistance < 0) CarDistance += SplineLength;
-        }
-        else
-        {
-            CarDistance = FMath::Clamp(CarDistance, 0.0f, SplineLength);
-        }
-        
-        FVector CarLocation = PathSpline->GetLocationAtDistanceAlongSpline(CarDistance, ESplineCoordinateSpace::World);
-        FVector CarDirection = PathSpline->GetDirectionAtDistanceAlongSpline(CarDistance, ESplineCoordinateSpace::World);
-        FQuat CarRotation = CalculateTargetRotation(CarLocation, CarDirection);
-        
-        if (!TrainRotationOffset.IsZero())
-        {
-            CarRotation = CarRotation * FQuat(TrainRotationOffset);
-        }
-        
-        TrainCars[i]->SetWorldLocation(CarLocation);
-        TrainCars[i]->SetWorldRotation(CarRotation);
-    }
-}
-
-void ASphericalTrain::GenerateCircularSpline()
-{
-    if (!PlanetActor)
-    {
-        UE_LOG(LogTemp, Warning, TEXT("SphericalTrain: No planet actor assigned!"));
-        return;
-    }
-    
-    SetupSplineAroundPlanet();
-    UpdateSplineSettings();
-    PreviewTrainPosition();
-}
-
-void ASphericalTrain::ClearSplinePoints()
-{
-    PathSpline->ClearSplinePoints();
-    PathSpline->UpdateSpline();
-    SplineLength = 0;
-    SplinePointCount = 0;
-}
-
-void ASphericalTrain::ReverseSplineDirection()
-{
-    TArray<FVector> Points;
-    TArray<FVector> ArriveTangents;
-    TArray<FVector> LeaveTangents;
-    
-    // Collect points in reverse order
-    for (int32 i = PathSpline->GetNumberOfSplinePoints() - 1; i >= 0; i--)
-    {
-        Points.Add(PathSpline->GetLocationAtSplinePoint(i, ESplineCoordinateSpace::World));
-        
-        // Swap and negate tangents
-        FVector ArriveTan = PathSpline->GetArriveTangentAtSplinePoint(i, ESplineCoordinateSpace::World);
-        FVector LeaveTan = PathSpline->GetLeaveTangentAtSplinePoint(i, ESplineCoordinateSpace::World);
-        ArriveTangents.Add(-LeaveTan);
-        LeaveTangents.Add(-ArriveTan);
-    }
-    
-    // Clear and rebuild spline
-    PathSpline->ClearSplinePoints();
-    
-    for (int32 i = 0; i < Points.Num(); i++)
-    {
-        PathSpline->AddSplineWorldPoint(Points[i]);
-        PathSpline->SetTangentsAtSplinePoint(i, ArriveTangents[i], LeaveTangents[i], ESplineCoordinateSpace::World);
-    }
-    
-    PathSpline->UpdateSpline();
-    PreviewTrainPosition();
-}
-
-void ASphericalTrain::SetupSplineAroundPlanet()
-{
-    if (!PlanetActor)
-    {
-        UE_LOG(LogTemp, Warning, TEXT("SphericalTrain: No planet actor assigned!"));
-        return;
-    }
-    
-    // Clear existing spline points
-    PathSpline->ClearSplinePoints();
-    
-    FVector PlanetCenter = GetPlanetCenter();
-    
-    // Create a circular path
-    float AngleStep = 360.0f / NumberOfSplinePoints;
-    
-    // Find two perpendicular vectors to the normal axis
-    FVector Right, Forward;
-    SplineNormalAxis.Normalize();
-    
-    if (FMath::Abs(SplineNormalAxis.Z) < 0.9f)
-    {
-        Right = FVector::CrossProduct(SplineNormalAxis, FVector::UpVector).GetSafeNormal();
-    }
-    else
-    {
-        Right = FVector::CrossProduct(SplineNormalAxis, FVector::ForwardVector).GetSafeNormal();
-    }
-    Forward = FVector::CrossProduct(Right, SplineNormalAxis).GetSafeNormal();
-    
-    // Rotate by start angle
-    if (!FMath::IsNearlyZero(SplineStartAngle))
-    {
-        FQuat StartRotation = FQuat(SplineNormalAxis, FMath::DegreesToRadians(SplineStartAngle));
-        Forward = StartRotation.RotateVector(Forward);
-        Right = StartRotation.RotateVector(Right);
-    }
-    
-    for (int32 i = 0; i < NumberOfSplinePoints; i++)
-    {
-        float Angle = FMath::DegreesToRadians(AngleStep * i);
-        
-        // Create point on circle
-        FVector LocalPoint = (Forward * FMath::Cos(Angle) + Right * FMath::Sin(Angle)) * SplineRadius;
-        FVector WorldPoint = PlanetCenter + LocalPoint;
-        
-        // Add point to spline
-        PathSpline->AddSplineWorldPoint(WorldPoint);
-        
-        // Snap to planet surface and set proper normal
-        SnapSplinePointToPlanetSurface(i, WorldPoint);
-        
-        // FIXED: Set the up vector (normal) to point radially outward from planet center
-        FVector RadialDirection = (WorldPoint - PlanetCenter).GetSafeNormal();
-        PathSpline->SetUpVectorAtSplinePoint(i, RadialDirection, ESplineCoordinateSpace::World);
-    }
-    
-    // Set spline to closed loop
-    PathSpline->SetClosedLoop(true);
-    
-    // Update spline with automatic tangents
-    PathSpline->UpdateSpline();
-    
-    // FIXED: After updating spline, ensure all up vectors are still correct
-    for (int32 i = 0; i < PathSpline->GetNumberOfSplinePoints(); i++)
-    {
-        FVector PointLocation = PathSpline->GetLocationAtSplinePoint(i, ESplineCoordinateSpace::World);
-        FVector RadialDirection = (PointLocation - PlanetCenter).GetSafeNormal();
-        PathSpline->SetUpVectorAtSplinePoint(i, RadialDirection, ESplineCoordinateSpace::World);
-    }
-    
-    // Final spline update
-    PathSpline->UpdateSpline();
-    
-    SplineLength = PathSpline->GetSplineLength();
-    SplinePointCount = PathSpline->GetNumberOfSplinePoints();
-}
-
-void ASphericalTrain::SnapSplinePointToPlanetSurface(int32 PointIndex, const FVector& InitialPosition)
-{
-    FVector PlanetCenter = GetPlanetCenter();
-    
-    // Project point onto sphere surface
-    FVector DirectionFromCenter = (InitialPosition - PlanetCenter).GetSafeNormal();
-    FVector SurfacePoint = PlanetCenter + DirectionFromCenter * (PlanetRadius + SplineHeightOffset);
-    
-    // Perform a line trace to get exact surface if planet has complex geometry
-    FHitResult HitResult;
-    FVector TraceStart = PlanetCenter + DirectionFromCenter * (PlanetRadius * 2.0f);
-    FVector TraceEnd = PlanetCenter;
-    
-    FCollisionQueryParams QueryParams;
-    QueryParams.AddIgnoredActor(this);
-    
-    if (GetWorld() && GetWorld()->LineTraceSingleByChannel(HitResult, TraceStart, TraceEnd, 
-                                             ECollisionChannel::ECC_WorldStatic, QueryParams))
-    {
-        if (HitResult.GetActor() == PlanetActor)
-        {
-            SurfacePoint = HitResult.Location + HitResult.Normal * SplineHeightOffset;
-            // Use the hit normal if we have a complex surface
-            DirectionFromCenter = HitResult.Normal;
-        }
-    }
-    
-    // Update spline point location
-    PathSpline->SetLocationAtSplinePoint(PointIndex, SurfacePoint, ESplineCoordinateSpace::World);
-    
-    // FIXED: Set the up vector (normal) to point radially outward from planet center
-    // This ensures the spline control point normal is directed from the center of the planet
-    FVector RadialDirection = (SurfacePoint - PlanetCenter).GetSafeNormal();
-    PathSpline->SetUpVectorAtSplinePoint(PointIndex, RadialDirection, ESplineCoordinateSpace::World);
-}
-
-void ASphericalTrain::SnapAllPointsToSurface()
-{
-    if (!PlanetActor) return;
-    
-    FVector PlanetCenter = GetPlanetCenter();
-    
-    for (int32 i = 0; i < PathSpline->GetNumberOfSplinePoints(); i++)
-    {
-        FVector CurrentLocation = PathSpline->GetLocationAtSplinePoint(i, ESplineCoordinateSpace::World);
-        SnapSplinePointToPlanetSurface(i, CurrentLocation);
-        
-        // FIXED: Ensure up vector is set correctly after snapping
-        FVector PointLocation = PathSpline->GetLocationAtSplinePoint(i, ESplineCoordinateSpace::World);
-        FVector RadialDirection = (PointLocation - PlanetCenter).GetSafeNormal();
-        PathSpline->SetUpVectorAtSplinePoint(i, RadialDirection, ESplineCoordinateSpace::World);
-    }
-    
-    PathSpline->UpdateSpline();
-    SplineLength = PathSpline->GetSplineLength();
-    PreviewTrainPosition();
-}
-
-void ASphericalTrain::AddSplinePointAtActor()
-{
-    FVector ActorLocation = GetActorLocation();
-    FVector PlanetCenter = GetPlanetCenter();
-    
-    if (PlanetActor)
-    {
-        // Snap to planet surface
-        FVector Direction = (ActorLocation - PlanetCenter).GetSafeNormal();
-        ActorLocation = PlanetCenter + Direction * (PlanetRadius + SplineHeightOffset);
-    }
-    
-    // Add the point
-    int32 NewPointIndex = PathSpline->GetNumberOfSplinePoints();
-    PathSpline->AddSplineWorldPoint(ActorLocation);
-    
-    // FIXED: Set the up vector (normal) to point radially outward from planet center
-    if (PlanetActor)
-    {
-        FVector RadialDirection = (ActorLocation - PlanetCenter).GetSafeNormal();
-        PathSpline->SetUpVectorAtSplinePoint(NewPointIndex, RadialDirection, ESplineCoordinateSpace::World);
-    }
-    
-    PathSpline->UpdateSpline();
-    SplineLength = PathSpline->GetSplineLength();
-    SplinePointCount = PathSpline->GetNumberOfSplinePoints();
-}
-FVector ASphericalTrain::GetPlanetCenter() const
-{
-    if (PlanetActor)
-    {
-        return PlanetActor->GetActorLocation();
-    }
-    return FVector::ZeroVector;
-}
-
 void ASphericalTrain::UpdateTrainMovement(float DeltaTime)
 {
-    if (SplineLength <= 0.0f)
-    {
+    if (!PathSpline)
         return;
-    }
     
-    // Calculate speed with direction
-    float ActualSpeed = bReverseDirection ? -TrainSpeed : TrainSpeed;
+    float SplineLength = PathSpline->GetSplineLength();
+    if (SplineLength <= 0.0f)
+        return;
+    
+    // Calculate actual speed with direction
+    CurrentSpeed = bReverseDirection ? -TrainSpeed : TrainSpeed;
     
     // Update distance along spline
-    CurrentSplineDistance += ActualSpeed * DeltaTime;
+    CurrentSplineDistance += CurrentSpeed * DeltaTime;
     
     // Handle looping
     if (bLoopMovement)
@@ -529,16 +153,17 @@ void ASphericalTrain::UpdateTrainMovement(float DeltaTime)
         CurrentSplineDistance = FMath::Clamp(CurrentSplineDistance, 0.0f, SplineLength);
         
         // Stop at ends if not looping
-        if ((CurrentSplineDistance >= SplineLength && ActualSpeed > 0) ||
-            (CurrentSplineDistance <= 0.0f && ActualSpeed < 0))
+        if ((CurrentSplineDistance >= SplineLength && CurrentSpeed > 0) ||
+            (CurrentSplineDistance <= 0.0f && CurrentSpeed < 0))
         {
             bIsMoving = false;
+            CurrentSpeed = 0.0f;
         }
     }
     
-    // Get position from spline
-    FVector NewLocation = PathSpline->GetLocationAtDistanceAlongSpline(CurrentSplineDistance, 
-                                                                       ESplineCoordinateSpace::World);
+    // Update position
+    FVector NewLocation = PathSpline->GetLocationAtDistanceAlongSpline(
+        CurrentSplineDistance, ESplineCoordinateSpace::World);
     
     if (!NewLocation.IsNearlyZero())
     {
@@ -546,11 +171,14 @@ void ASphericalTrain::UpdateTrainMovement(float DeltaTime)
     }
 }
 
-void ASphericalTrain::UpdateTrainOrientationImproved(float DeltaTime)
+void ASphericalTrain::UpdateTrainOrientation(float DeltaTime)
 {
+    if (!PathSpline || !TrainMesh)
+        return;
+    
     // Get current spline tangent
-    FVector SplineTangent = PathSpline->GetDirectionAtDistanceAlongSpline(CurrentSplineDistance, 
-                                                                           ESplineCoordinateSpace::World);
+    FVector SplineTangent = PathSpline->GetDirectionAtDistanceAlongSpline(
+        CurrentSplineDistance, ESplineCoordinateSpace::World);
     SplineTangent.Normalize();
     
     // Reverse direction if needed
@@ -562,8 +190,14 @@ void ASphericalTrain::UpdateTrainOrientationImproved(float DeltaTime)
     // Get train location
     FVector TrainLocation = TrainMesh->GetComponentLocation();
     
-    // Calculate base rotation
-    FQuat TargetRotation = CalculateTargetRotation(TrainLocation, SplineTangent);
+    // Calculate base rotation using spherical spline orientation
+    FQuat TargetRotation = PathSpline->GetOrientationAtDistance(CurrentSplineDistance);
+    
+    // If we need to face the opposite direction
+    if (bReverseDirection)
+    {
+        TargetRotation = TargetRotation * FQuat(FVector::UpVector, FMath::DegreesToRadians(180.0f));
+    }
     
     // Apply rotation offset
     if (!TrainRotationOffset.IsZero())
@@ -585,7 +219,7 @@ void ASphericalTrain::UpdateTrainOrientationImproved(float DeltaTime)
         }
     }
     
-    // Apply rotation
+    // Apply rotation with smoothing
     if (bUseSmoothRotation)
     {
         CurrentRotation = FQuat::Slerp(CurrentRotation, TargetRotation, DeltaTime * RotationSmoothSpeed);
@@ -600,19 +234,82 @@ void ASphericalTrain::UpdateTrainOrientationImproved(float DeltaTime)
     LastSplineDirection = SplineTangent;
 }
 
-// [Previous implementation methods remain the same: CalculateTargetRotation, CalculateBankAngle, UpdateTrainCarsImproved, DrawDebugVisualization]
-// These methods are identical to the previous version, so I'll include just the signatures for brevity
-
-FQuat ASphericalTrain::CalculateTargetRotation(const FVector& Location, const FVector& SplineDirection) const
+void ASphericalTrain::UpdateTrainCars(float DeltaTime)
 {
-    FVector PlanetCenter = GetPlanetCenter();
+    if (!PathSpline)
+        return;
+    
+    float SplineLength = PathSpline->GetSplineLength();
+    
+    for (int32 i = 0; i < TrainCars.Num(); i++)
+    {
+        if (!TrainCars[i])
+            continue;
+        
+        // Calculate car distance along spline
+        float CarDistance = CurrentSplineDistance - 
+            (CarSeparationDistance * (i + 1) * (bReverseDirection ? -1 : 1));
+        
+        // Handle looping
+        if (bLoopMovement)
+        {
+            CarDistance = FMath::Fmod(CarDistance + SplineLength * 2, SplineLength);
+            if (CarDistance < 0) 
+                CarDistance += SplineLength;
+        }
+        else
+        {
+            CarDistance = FMath::Clamp(CarDistance, 0.0f, SplineLength);
+        }
+        
+        // Get car position and orientation
+        FVector CarLocation = PathSpline->GetLocationAtDistanceAlongSpline(
+            CarDistance, ESplineCoordinateSpace::World);
+        
+        FQuat CarRotation = PathSpline->GetOrientationAtDistance(CarDistance);
+        
+        if (bReverseDirection)
+        {
+            CarRotation = CarRotation * FQuat(FVector::UpVector, FMath::DegreesToRadians(180.0f));
+        }
+        
+        if (!TrainRotationOffset.IsZero())
+        {
+            CarRotation = CarRotation * FQuat(TrainRotationOffset);
+        }
+        
+        // Apply position and rotation
+        TrainCars[i]->SetWorldLocation(CarLocation);
+        
+        if (bUseSmoothRotation)
+        {
+            FQuat CurrentCarRotation = TrainCars[i]->GetComponentQuat();
+            CarRotation = FQuat::Slerp(CurrentCarRotation, CarRotation, DeltaTime * RotationSmoothSpeed);
+        }
+        
+        TrainCars[i]->SetWorldRotation(CarRotation);
+    }
+}
+
+FQuat ASphericalTrain::CalculateTargetRotation(const FVector& Location, const FVector& Direction) const
+{
+    if (!PathSpline || !PathSpline->PlanetActor)
+    {
+        // Fallback to simple rotation
+        return FRotationMatrix::MakeFromX(Direction).ToQuat();
+    }
+    
+    FVector PlanetCenter = PathSpline->GetPlanetCenter();
     FVector UpVector = (Location - PlanetCenter).GetSafeNormal();
-    FVector TangentDirection = SplineDirection - (SplineDirection | UpVector) * UpVector;
+    
+    // Project direction to be perpendicular to up vector
+    FVector TangentDirection = Direction - (Direction | UpVector) * UpVector;
     TangentDirection.Normalize();
     
     if (TangentDirection.IsNearlyZero(0.01f))
     {
-        FVector ArbitraryVector = FMath::Abs(UpVector.Z) < 0.9f ? FVector::UpVector : FVector::RightVector;
+        FVector ArbitraryVector = FMath::Abs(UpVector.Z) < 0.9f ? 
+            FVector::UpVector : FVector::RightVector;
         TangentDirection = FVector::CrossProduct(UpVector, ArbitraryVector).GetSafeNormal();
     }
     
@@ -625,196 +322,332 @@ FQuat ASphericalTrain::CalculateTargetRotation(const FVector& Location, const FV
 
 float ASphericalTrain::CalculateBankAngle(float DeltaTime) const
 {
-    if (DeltaTime <= 0.0f || FMath::Abs(TrainSpeed) <= 0.0f) return 0.0f;
+    if (!PathSpline || DeltaTime <= 0.0f || FMath::Abs(TrainSpeed) <= 0.0f)
+        return 0.0f;
     
     const float SampleDistance = 50.0f;
-    FVector CurrentDir = PathSpline->GetDirectionAtDistanceAlongSpline(CurrentSplineDistance, 
-                                                                        ESplineCoordinateSpace::World);
+    float SplineLength = PathSpline->GetSplineLength();
     
-    float LookAheadDist = CurrentSplineDistance + (bReverseDirection ? -SampleDistance : SampleDistance);
+    // Get current and look-ahead directions
+    FVector CurrentDir = PathSpline->GetDirectionAtDistanceAlongSpline(
+        CurrentSplineDistance, ESplineCoordinateSpace::World);
+    
+    float LookAheadDist = CurrentSplineDistance + 
+        (bReverseDirection ? -SampleDistance : SampleDistance);
+    
     if (bLoopMovement)
     {
         LookAheadDist = FMath::Fmod(LookAheadDist + SplineLength * 2, SplineLength);
-        if (LookAheadDist < 0) LookAheadDist += SplineLength;
+        if (LookAheadDist < 0) 
+            LookAheadDist += SplineLength;
     }
     else
     {
         LookAheadDist = FMath::Clamp(LookAheadDist, 0.0f, SplineLength);
     }
     
-    FVector NextDir = PathSpline->GetDirectionAtDistanceAlongSpline(LookAheadDist, 
-                                                                     ESplineCoordinateSpace::World);
+    FVector NextDir = PathSpline->GetDirectionAtDistanceAlongSpline(
+        LookAheadDist, ESplineCoordinateSpace::World);
     
+    // Calculate turn sharpness
     float DotProduct = FVector::DotProduct(CurrentDir.GetSafeNormal(), NextDir.GetSafeNormal());
     DotProduct = FMath::Clamp(DotProduct, -1.0f, 1.0f);
     float AngleChange = FMath::Acos(DotProduct);
     
+    // Determine turn direction
     FVector CrossProduct = FVector::CrossProduct(CurrentDir, NextDir);
-    FVector PlanetCenter = GetPlanetCenter();
-    FVector TrainLocation = TrainMesh->GetComponentLocation();
-    FVector UpVector = (TrainLocation - PlanetCenter).GetSafeNormal();
-    
+    FVector UpVector = PathSpline->GetUpVectorAtDistance(CurrentSplineDistance);
     float TurnDirection = FVector::DotProduct(CrossProduct, UpVector);
+    
+    // Calculate bank angle
     float TurnSharpness = AngleChange / (SampleDistance / 1000.0f);
     float SpeedFactor = FMath::Min(FMath::Abs(TrainSpeed) / 500.0f, 1.0f);
     float BankAngle = TurnSharpness * SpeedFactor * MaxBankAngle * -FMath::Sign(TurnDirection);
     
-    if (bReverseDirection) BankAngle = -BankAngle;
+    if (bReverseDirection) 
+        BankAngle = -BankAngle;
     
     return FMath::Clamp(BankAngle, -MaxBankAngle, MaxBankAngle);
 }
 
-void ASphericalTrain::UpdateTrainCarsImproved(float DeltaTime)
+void ASphericalTrain::PreviewTrainPosition()
 {
+    if (!TrainMesh || !PathSpline)
+        return;
+    
+    float SplineLength = PathSpline->GetSplineLength();
+    if (SplineLength <= 0.0f)
+        return;
+    
+    // Calculate preview position
+    float PreviewDistance = SplineLength * FMath::Clamp(InitialPositionRatio, 0.0f, 1.0f);
+    SetTrainPosition(PreviewDistance);
+}
+
+void ASphericalTrain::SetTrainPosition(float Distance)
+{
+    if (!PathSpline || !TrainMesh)
+        return;
+    
+    float SplineLength = PathSpline->GetSplineLength();
+    if (SplineLength <= 0.0f)
+        return;
+    
+    // Clamp distance
+    Distance = FMath::Clamp(Distance, 0.0f, SplineLength);
+    
+    // Get position and rotation from spline
+    FVector Location = PathSpline->GetLocationAtDistanceAlongSpline(
+        Distance, ESplineCoordinateSpace::World);
+    FQuat Rotation = PathSpline->GetOrientationAtDistance(Distance);
+    
+    // Apply rotation offset
+    if (!TrainRotationOffset.IsZero())
+    {
+        Rotation = Rotation * FQuat(TrainRotationOffset);
+    }
+    
+    // Set transform
+    TrainMesh->SetWorldLocation(Location);
+    TrainMesh->SetWorldRotation(Rotation);
+    
+    // Update train cars
     for (int32 i = 0; i < TrainCars.Num(); i++)
     {
-        if (!TrainCars[i]) continue;
+        if (!TrainCars[i])
+            continue;
         
-        float CarDistance = CurrentSplineDistance - (CarSeparationDistance * (i + 1) * (bReverseDirection ? -1 : 1));
+        float CarDistance = Distance - (CarSeparationDistance * (i + 1));
         
         if (bLoopMovement)
         {
             CarDistance = FMath::Fmod(CarDistance + SplineLength * 2, SplineLength);
-            if (CarDistance < 0) CarDistance += SplineLength;
+            if (CarDistance < 0) 
+                CarDistance += SplineLength;
         }
         else
         {
             CarDistance = FMath::Clamp(CarDistance, 0.0f, SplineLength);
         }
         
-        FVector CarLocation = PathSpline->GetLocationAtDistanceAlongSpline(CarDistance, 
-                                                                          ESplineCoordinateSpace::World);
-        FVector CarDirection = PathSpline->GetDirectionAtDistanceAlongSpline(CarDistance, 
-                                                                            ESplineCoordinateSpace::World);
-        
-        if (bReverseDirection) CarDirection = -CarDirection;
-        
-        TrainCars[i]->SetWorldLocation(CarLocation);
-        
-        FQuat CarRotation = CalculateTargetRotation(CarLocation, CarDirection);
+        FVector CarLocation = PathSpline->GetLocationAtDistanceAlongSpline(
+            CarDistance, ESplineCoordinateSpace::World);
+        FQuat CarRotation = PathSpline->GetOrientationAtDistance(CarDistance);
         
         if (!TrainRotationOffset.IsZero())
         {
             CarRotation = CarRotation * FQuat(TrainRotationOffset);
         }
         
-        if (bUseSmoothRotation)
-        {
-            FQuat CurrentCarRotation = TrainCars[i]->GetComponentQuat();
-            CarRotation = FQuat::Slerp(CurrentCarRotation, CarRotation, DeltaTime * RotationSmoothSpeed);
-        }
-        
+        TrainCars[i]->SetWorldLocation(CarLocation);
         TrainCars[i]->SetWorldRotation(CarRotation);
     }
 }
 
-void ASphericalTrain::DrawDebugVisualization()
+void ASphericalTrain::DrawDebugVisualization() const
 {
-    // [Same implementation as before - draws debug lines, spheres, and text]
-    // Keeping this method identical to the previous version for consistency
-    if (!GetWorld()) return;
-    
-    if (bShowDebugSpline)
-    {
-        const int32 Segments = 100;
-        for (int32 i = 0; i < Segments; i++)
-        {
-            float Distance1 = (SplineLength / Segments) * i;
-            float Distance2 = (SplineLength / Segments) * (i + 1);
-            
-            FVector Point1 = PathSpline->GetLocationAtDistanceAlongSpline(Distance1, ESplineCoordinateSpace::World);
-            FVector Point2 = PathSpline->GetLocationAtDistanceAlongSpline(Distance2, ESplineCoordinateSpace::World);
-            
-            float Hue = (float)i / Segments * 360.0f;
-            FLinearColor Color = FLinearColor::MakeFromHSV8(Hue, 255, 255);
-            
-            DrawDebugLine(GetWorld(), Point1, Point2, Color.ToFColor(true), false, 0.01f, 0, 2.0f);
-        }
-        
-        for (int32 i = 0; i < PathSpline->GetNumberOfSplinePoints(); i++)
-        {
-            FVector PointLocation = PathSpline->GetLocationAtSplinePoint(i, ESplineCoordinateSpace::World);
-            DrawDebugSphere(GetWorld(), PointLocation, 20.0f, 8, FColor::Red, false, 0.01f);
-            DrawDebugString(GetWorld(), PointLocation + FVector(0, 0, 30), FString::FromInt(i), 
-                          nullptr, FColor::White, 0.01f, true);
-        }
-        
-        FVector CurrentPos = PathSpline->GetLocationAtDistanceAlongSpline(CurrentSplineDistance, 
-                                                                         ESplineCoordinateSpace::World);
-        DrawDebugSphere(GetWorld(), CurrentPos, 30.0f, 12, FColor::Green, false, 0.01f);
-    }
-    
     if (bShowOrientationVectors)
+        DrawDebugOrientationVectors();
+    
+    if (bShowMovementPath)
+        DrawDebugMovementPath();
+    
+    if (bShowDebugInfo)
+        DrawDebugInfo();
+}
+
+void ASphericalTrain::DrawDebugOrientationVectors() const
+{
+    if (!GetWorld() || !TrainMesh || !PathSpline)
+        return;
+    
+    FVector TrainLocation = TrainMesh->GetComponentLocation();
+    
+    // Mesh vectors
+    FVector MeshForward = TrainMesh->GetForwardVector();
+    FVector MeshRight = TrainMesh->GetRightVector();
+    FVector MeshUp = TrainMesh->GetUpVector();
+    
+    DrawDebugDirectionalArrow(GetWorld(), TrainLocation, TrainLocation + MeshForward * 150, 
+                             30.0f, FColor::Red, false, 0.01f, 0, 5.0f);
+    DrawDebugString(GetWorld(), TrainLocation + MeshForward * 160, TEXT("Forward"), 
+                   nullptr, FColor::Red, 0.01f, true);
+    
+    DrawDebugDirectionalArrow(GetWorld(), TrainLocation, TrainLocation + MeshRight * 100, 
+                             20.0f, FColor::Green, false, 0.01f, 0, 5.0f);
+    DrawDebugString(GetWorld(), TrainLocation + MeshRight * 110, TEXT("Right"), 
+                   nullptr, FColor::Green, 0.01f, true);
+    
+    DrawDebugDirectionalArrow(GetWorld(), TrainLocation, TrainLocation + MeshUp * 200, 
+                             40.0f, FColor::Blue, false, 0.01f, 0, 5.0f);
+    DrawDebugString(GetWorld(), TrainLocation + MeshUp * 210, TEXT("Up"), 
+                   nullptr, FColor::Blue, 0.01f, true);
+    
+    // Planet normal
+    if (PathSpline->PlanetActor)
     {
-        FVector TrainLocation = TrainMesh->GetComponentLocation();
-        FVector PlanetCenter = GetPlanetCenter();
-        
-        FVector MeshForward = TrainMesh->GetForwardVector();
-        FVector MeshRight = TrainMesh->GetRightVector();
-        FVector MeshUp = TrainMesh->GetUpVector();
-        
-        DrawDebugDirectionalArrow(GetWorld(), TrainLocation, TrainLocation + MeshForward * 150, 
-                                 30.0f, FColor::Red, false, 0.01f, 0, 5.0f);
-        DrawDebugString(GetWorld(), TrainLocation + MeshForward * 160, TEXT("Forward"), 
-                       nullptr, FColor::Red, 0.01f, true);
-        
-        DrawDebugDirectionalArrow(GetWorld(), TrainLocation, TrainLocation + MeshRight * 100, 
-                                 20.0f, FColor::Green, false, 0.01f, 0, 5.0f);
-        DrawDebugString(GetWorld(), TrainLocation + MeshRight * 110, TEXT("Right"), 
-                       nullptr, FColor::Green, 0.01f, true);
-        
-        DrawDebugDirectionalArrow(GetWorld(), TrainLocation, TrainLocation + MeshUp * 200, 
-                                 40.0f, FColor::Blue, false, 0.01f, 0, 5.0f);
-        DrawDebugString(GetWorld(), TrainLocation + MeshUp * 210, TEXT("Up"), 
-                       nullptr, FColor::Blue, 0.01f, true);
-        
+        FVector PlanetCenter = PathSpline->GetPlanetCenter();
         FVector PlanetNormal = (TrainLocation - PlanetCenter).GetSafeNormal();
         DrawDebugLine(GetWorld(), TrainLocation, TrainLocation + PlanetNormal * 180, 
                      FColor::Cyan, false, 0.01f, 0, 3.0f);
         DrawDebugString(GetWorld(), TrainLocation + PlanetNormal * 190, TEXT("Planet Normal"), 
                        nullptr, FColor::Cyan, 0.01f, true);
-        
-        FVector SplineTangent = PathSpline->GetDirectionAtDistanceAlongSpline(CurrentSplineDistance, 
-                                                                              ESplineCoordinateSpace::World);
-        if (bReverseDirection) SplineTangent = -SplineTangent;
-        DrawDebugLine(GetWorld(), TrainLocation, TrainLocation + SplineTangent * 120, 
-                     FColor::Yellow, false, 0.01f, 0, 3.0f);
-        DrawDebugString(GetWorld(), TrainLocation + SplineTangent * 130, TEXT("Spline Dir"), 
-                       nullptr, FColor::Yellow, 0.01f, true);
-        
-        DrawDebugLine(GetWorld(), TrainLocation, PlanetCenter, 
-                     FColor::Magenta, false, 0.01f, 0, 1.0f);
     }
     
-    if (bShowDebugInfo)
+    // Spline direction
+    FVector SplineTangent = PathSpline->GetDirectionAtDistanceAlongSpline(
+        CurrentSplineDistance, ESplineCoordinateSpace::World);
+    if (bReverseDirection) 
+        SplineTangent = -SplineTangent;
+    
+    DrawDebugLine(GetWorld(), TrainLocation, TrainLocation + SplineTangent * 120, 
+                 FColor::Yellow, false, 0.01f, 0, 3.0f);
+    DrawDebugString(GetWorld(), TrainLocation + SplineTangent * 130, TEXT("Spline Dir"), 
+                   nullptr, FColor::Yellow, 0.01f, true);
+}
+
+void ASphericalTrain::DrawDebugMovementPath() const
+{
+    if (!GetWorld() || !PathSpline)
+        return;
+    
+    float SplineLength = PathSpline->GetSplineLength();
+    const int32 Segments = 100;
+    
+    for (int32 i = 0; i < Segments; i++)
     {
-        FVector TrainLocation = TrainMesh->GetComponentLocation();
+        float Distance1 = (SplineLength / Segments) * i;
+        float Distance2 = (SplineLength / Segments) * (i + 1);
         
-        FString DebugText = FString::Printf(
-            TEXT("Speed: %.1f units/s %s\n")
-            TEXT("Distance: %.1f / %.1f\n")
-            TEXT("Progress: %.1f%%\n")
-            TEXT("Bank Angle: %.1f°\n")
-            TEXT("Spline Points: %d\n")
-            TEXT("Moving: %s | Loop: %s"),
-            TrainSpeed,
-            bReverseDirection ? TEXT("(Reverse)") : TEXT(""),
-            CurrentSplineDistance, 
-            SplineLength,
-            (CurrentSplineDistance / SplineLength) * 100.0f,
-            CurrentBankAngle,
-            SplinePointCount,
-            bIsMoving ? TEXT("YES") : TEXT("NO"),
-            bLoopMovement ? TEXT("ON") : TEXT("OFF")
-        );
+        FVector Point1 = PathSpline->GetLocationAtDistanceAlongSpline(
+            Distance1, ESplineCoordinateSpace::World);
+        FVector Point2 = PathSpline->GetLocationAtDistanceAlongSpline(
+            Distance2, ESplineCoordinateSpace::World);
         
-        DrawDebugString(GetWorld(), TrainLocation + FVector(0, 0, 250), DebugText, 
-                       nullptr, FColor::White, 0.01f, true, 1.2f);
+        float Hue = (float)i / Segments * 360.0f;
+        FLinearColor Color = FLinearColor::MakeFromHSV8(Hue, 255, 255);
         
-        FRotator CurrentRot = CurrentRotation.Rotator();
-        FString RotText = FString::Printf(TEXT("Rotation: P=%.1f Y=%.1f R=%.1f"), 
-                                         CurrentRot.Pitch, CurrentRot.Yaw, CurrentRot.Roll);
-        DrawDebugString(GetWorld(), TrainLocation + FVector(0, 0, 100), RotText, 
-                       nullptr, FColor::Yellow, 0.01f, true);
+        DrawDebugLine(GetWorld(), Point1, Point2, Color.ToFColor(true), false, 0.01f, 0, 2.0f);
     }
+    
+    // Draw current position
+    FVector CurrentPos = PathSpline->GetLocationAtDistanceAlongSpline(
+        CurrentSplineDistance, ESplineCoordinateSpace::World);
+    DrawDebugSphere(GetWorld(), CurrentPos, 30.0f, 12, FColor::Green, false, 0.01f);
+}
+
+void ASphericalTrain::DrawDebugInfo() const
+{
+    if (!GetWorld() || !TrainMesh || !PathSpline)
+        return;
+    
+    FVector TrainLocation = TrainMesh->GetComponentLocation();
+    float SplineLength = PathSpline->GetSplineLength();
+    
+    FString DebugText = FString::Printf(
+        TEXT("Speed: %.1f units/s %s\n")
+        TEXT("Distance: %.1f / %.1f\n")
+        TEXT("Progress: %.1f%%\n")
+        TEXT("Bank Angle: %.1f°\n")
+        TEXT("Moving: %s | Loop: %s"),
+        CurrentSpeed,
+        bReverseDirection ? TEXT("(Reverse)") : TEXT(""),
+        CurrentSplineDistance, 
+        SplineLength,
+        GetCurrentProgress() * 100.0f,
+        CurrentBankAngle,
+        bIsMoving ? TEXT("YES") : TEXT("NO"),
+        bLoopMovement ? TEXT("ON") : TEXT("OFF")
+    );
+    
+    DrawDebugString(GetWorld(), TrainLocation + FVector(0, 0, 250), DebugText, 
+                   nullptr, FColor::White, 0.01f, true, 1.2f);
+}
+
+// Public Blueprint Functions
+void ASphericalTrain::StartMovement()
+{
+    bIsMoving = true;
+}
+
+void ASphericalTrain::StopMovement()
+{
+    bIsMoving = false;
+    CurrentSpeed = 0.0f;
+}
+
+void ASphericalTrain::ToggleMovement()
+{
+    bIsMoving = !bIsMoving;
+    if (!bIsMoving)
+    {
+        CurrentSpeed = 0.0f;
+    }
+}
+
+void ASphericalTrain::SetSpeed(float NewSpeed)
+{
+    TrainSpeed = FMath::Clamp(NewSpeed, -2000.0f, 2000.0f);
+}
+
+void ASphericalTrain::ReverseDirection()
+{
+    bReverseDirection = !bReverseDirection;
+}
+
+void ASphericalTrain::SetPositionOnSpline(float NormalizedPosition)
+{
+    if (!PathSpline)
+        return;
+    
+    float SplineLength = PathSpline->GetSplineLength();
+    CurrentSplineDistance = SplineLength * FMath::Clamp(NormalizedPosition, 0.0f, 1.0f);
+    SetTrainPosition(CurrentSplineDistance);
+}
+
+float ASphericalTrain::GetCurrentProgress() const
+{
+    if (!PathSpline)
+        return 0.0f;
+    
+    float SplineLength = PathSpline->GetSplineLength();
+    if (SplineLength <= 0.0f)
+        return 0.0f;
+    
+    return CurrentSplineDistance / SplineLength;
+}
+
+FVector ASphericalTrain::GetCurrentLocation() const
+{
+    if (TrainMesh)
+        return TrainMesh->GetComponentLocation();
+    
+    return FVector::ZeroVector;
+}
+
+FRotator ASphericalTrain::GetCurrentRotation() const
+{
+    if (TrainMesh)
+        return TrainMesh->GetComponentRotation();
+    
+    return FRotator::ZeroRotator;
+}
+
+// Editor Functions
+void ASphericalTrain::Editor_ResetToStart()
+{
+    InitialPositionRatio = 0.0f;
+    PreviewTrainPosition();
+}
+
+void ASphericalTrain::Editor_PreviewAtMiddle()
+{
+    InitialPositionRatio = 0.5f;
+    PreviewTrainPosition();
+}
+
+void ASphericalTrain::Editor_PreviewAtEnd()
+{
+    InitialPositionRatio = 1.0f;
+    PreviewTrainPosition();
 }
