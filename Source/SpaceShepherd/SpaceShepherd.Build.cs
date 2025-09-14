@@ -23,15 +23,9 @@ public class SpaceShepherd : ModuleRules
 
 		PrivateDependencyModuleNames.AddRange(new string[] { });
 
-		PublicIncludePaths.AddRange(new string[] {
-			"SpaceShepherd",
-			"SpaceShepherd/Variant_Platforming",
-			"SpaceShepherd/Variant_Combat",
-			"SpaceShepherd/Variant_Combat/AI",
-			"SpaceShepherd/Variant_SideScrolling",
-			"SpaceShepherd/Variant_SideScrolling/Gameplay",
-			"SpaceShepherd/Variant_SideScrolling/AI"
-		});
+		PublicIncludePaths.AddRange([
+			"SpaceShepherd"
+		]);
 
 		// Uncomment if you are using Slate UI
 		// PrivateDependencyModuleNames.AddRange(new string[] { "Slate", "SlateCore" });
