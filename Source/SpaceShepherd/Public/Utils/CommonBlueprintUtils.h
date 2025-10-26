@@ -24,5 +24,18 @@ public:
 		return false;
 #endif
 	}
+
+	// Trivial conversions, for clearer intent (so you dont need to add a comment)
+	UFUNCTION(BlueprintPure, meta = (DisplayName = "Convert m ➞ cm"))
+	static float MetersToCentimeters(float Meters)
+	{
+		return Meters * 100.0f;
+	}
+
+	UFUNCTION(BlueprintPure, meta = (DisplayName = "Convert cm ➞ m"))
+	static float CentimetersToMeters(float Centimeters)
+	{
+		return Centimeters / 100.0f;
+	}
 };
 

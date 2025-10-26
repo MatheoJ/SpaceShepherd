@@ -13,8 +13,8 @@ float UPlanetFunctionLibrary::GravityFalloff(
 	const float FalloffRadiusSq = FalloffRadius * FalloffRadius;
 	const float DistanceToSurfaceSq = FVector::DistSquared(CharacterPos, PlanetCenter);
 
-	if (DistanceToSurfaceSq >= FalloffRadiusSq)
-		return 0.0f;
+	// if (DistanceToSurfaceSq >= FalloffRadiusSq)
+	// 	return 0.0f;
 
 	if (DistanceToSurfaceSq <= SurfaceRadiusSq)
 		return 1.0f;
@@ -22,8 +22,8 @@ float UPlanetFunctionLibrary::GravityFalloff(
 	// physically accurate inverse square falloff
 	const float InverseSqFalloff = SurfaceRadiusSq / DistanceToSurfaceSq;
 	// linear falloff (inverse square a des asymptotes mais on veut avoir des boundaries 0 et 1 exact)
-	const float LinearFalloff = 1.0f - (DistanceToSurfaceSq - SurfaceRadiusSq) / (FalloffRadiusSq - SurfaceRadiusSq);
-	const float WeightedFalloff = FMath::Clamp(InverseSqFalloff * LinearFalloff, 0.0f, 1.0f);
+	// const float LinearFalloff = 1.0f - (DistanceToSurfaceSq - SurfaceRadiusSq) / (FalloffRadiusSq - SurfaceRadiusSq);
+	// const float WeightedFalloff = FMath::Clamp(InverseSqFalloff * LinearFalloff, 0.0f, 1.0f);
 	
-	return WeightedFalloff;
+	return InverseSqFalloff;
 }
